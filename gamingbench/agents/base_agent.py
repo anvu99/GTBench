@@ -2,6 +2,9 @@
 import re
 from gamingbench.utils.history_tracker import Query
 from gamingbench.utils import utils
+from gamingbench.prompts.chat_prompts import CHAT_HISTORY_INJECTION
+
+
 
 
 class BaseAgent(object):
@@ -11,6 +14,7 @@ class BaseAgent(object):
         self.num_generations = config.num_generations
         self.model = None
         self.voting = config.majority_vote
+        self.enable_chat = getattr(config, "enable_chat", False)
         self.logger = utils.LLMBenchLogger(None)
 
     def step(self, observations):
@@ -79,3 +83,8 @@ class BaseAgent(object):
 
     def inform_action(self, state, player_idx, action):
         pass
+
+    def chat_step(self, observations, chat_history_str: str):
+        pass
+
+

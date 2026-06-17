@@ -50,11 +50,11 @@ def construct_observation_prompt(observations):
              f'{move_prompt}\n' \
              f'Your legal moves are: <Pass>, <Bet>.'
 
-    return _construct_head_prompt() + '\n' + prompt
+    return prompt
 
 
 if __name__ == '__main__':
-    prompt = _construct_head_prompt()
+    
     obs_prompt = construct_observation_prompt(
         {'card': 0, 'moves': 'pb', 'player_idx': 0})
     prompt += '\n' + obs_prompt

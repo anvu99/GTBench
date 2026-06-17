@@ -42,6 +42,7 @@ def get_args():
                         default=False, action='store_true')
     parser.add_argument('--num-workers', default=1, type=int)
     parser.add_argument('--threshold-matches', default=50, type=int)
+    parser.add_argument('--enable-chat', default=False, action='store_true', help='Enable chat feature for agents')
     args = parser.parse_args()
 
     return args
@@ -78,6 +79,9 @@ def run_game(game_name):
 
     for a, m in zip(agents, models):
         a.set_model(m)
+        a.enable_chat = getattr(args, 'enable_chat', False)
+        if hasattr(a, 'set_storage_dir'):
+            a.set_storage_dir(log_root)
 
     # exchange first player to mitigate first-player advantage
     reversed_agent_configs = copy.deepcopy(args.agent_configs)
@@ -91,6 +95,9 @@ def run_game(game_name):
 
     for a, m in zip(reversed_agents, reversed_models):
         a.set_model(m)
+        a.enable_chat = getattr(args, 'enable_chat', False)
+        if hasattr(a, 'set_storage_dir'):
+            a.set_storage_dir(log_root)
 
     for config_path in args.model_configs:
         game_env.append_models_config(utils.load_config(config_path))
@@ -168,7 +175,7 @@ def run_match(params):
 
     game_env.set_game(game)
 
-    if args.exchange_first_player and match_idx >= (args.num_matches / 2):
+    if args.exchange_first_player and match_idx % 2 == 1:
         # exchange first player
         game_env.set_agents(reversed_agents)
         game_env.set_models(reversed_models)

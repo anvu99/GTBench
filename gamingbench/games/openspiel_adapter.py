@@ -7,6 +7,10 @@ from gamingbench.utils.history_tracker import GameMatch, Step
 from gamingbench.utils import utils
 
 from open_spiel.python import games  # import prisoners_dilemma
+from gamingbench.prompts.system_prompts import construct_system_prompt
+from gamingbench.prompts.observation_prompts import construct_game_intro
+from gamingbench.chat.chat_channel import ChatChannel
+
 
 import copy
 
@@ -36,6 +40,15 @@ class OpenSpielGame:
     def play(self, agent_list, model_list, tracker):
         self.status = "Normal"
         _match = GameMatch()
+        chat_channel = ChatChannel()
+
+        # [LTM Integration] Initialize agent state for tracking
+        game_intro = construct_game_intro(self.game_name)
+        for i, agent in enumerate(agent_list):
+            if hasattr(agent, 'reset_game_state'):
+                opponent_idx = 1 - i if len(agent_list) == 2 else 0
+                opponent_name = f"{agent_list[opponent_idx].agent_name}_{model_list[opponent_idx].nick_name}" if len(agent_list) > 1 else "unknown"
+                agent.reset_game_state(opponent_name, game_intro)
 
         num_step = 0
         while not self.env.is_terminal():
@@ -51,6 +64,23 @@ class OpenSpielGame:
                 self.env.apply_action(action)
 
             elif self.env.is_simultaneous_node():
+                # Chat Phase (Simultaneous: Player 0 speaks first)
+                if all(getattr(agent, "enable_chat", False) for agent in agent_list):
+                    for player_idx in range(self.env.num_players()):
+                        obs_dict = self.openspiel_observation_to_dict(player_idx, str(self.env))
+                        obs_dict['env_name'] = self.game_name
+                        
+                        legal_actions = self.env.legal_actions(player_idx)
+                        obs_dict['openspiel_legal_actions'] = legal_actions
+                        valid_action = [self.env.action_to_string(a) for a in legal_actions]
+                        obs_dict['legal_moves'] = self.openspiel_action_to_agent(valid_action)
+
+                        chat_history = chat_channel.get_recent_window(player_idx)
+                        msg, _ = agent_list[player_idx].chat_step(obs_dict, chat_history)
+                        if msg:
+                            current_round = (num_step // self.env.num_players()) + 1
+                            chat_channel.add_message(player_idx, msg, round_idx=current_round)
+                            
                 # TODO: only support prisoners dilemma
                 chosen_actions = []
                 abnormal = False
@@ -67,6 +97,8 @@ class OpenSpielGame:
                     valid_action = self.openspiel_action_to_agent(valid_action)
                     observation_dict['legal_moves'] = valid_action
                     observation_dict['env_name'] = self.game_name
+                    observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
+                    
                     self.logger.info(
                         f"openspiel_game_legal_action:{legal_actions}")
                     self.logger.info(f"validMove:{valid_action}")
@@ -114,6 +146,41 @@ class OpenSpielGame:
 
             else:
                 player_idx = self.env.current_player()
+                
+                # Chat Phase (Sequential: Active player speaks first)
+                if all(getattr(agent, "enable_chat", False) for agent in agent_list):
+                    # 1. Active player speaks
+                    obs_dict_active = self.openspiel_observation_to_dict(player_idx, str(self.env))
+                    obs_dict_active['env_name'] = self.game_name
+
+                    legal_actions_active = self.env.legal_actions(player_idx)
+                    obs_dict_active['openspiel_legal_actions'] = legal_actions_active
+                    valid_action_active = [self.env.action_to_string(a) for a in legal_actions_active]
+                    obs_dict_active['legal_moves'] = self.openspiel_action_to_agent(valid_action_active)
+
+                    chat_history_active = chat_channel.get_recent_window(player_idx)
+                    msg_active, _ = agent_list[player_idx].chat_step(obs_dict_active, chat_history_active)
+                    if msg_active:
+                        current_round = (num_step // self.env.num_players()) + 1
+                        chat_channel.add_message(player_idx, msg_active, round_idx=current_round)
+                        
+                    # 2. Peer player speaks
+                    peer_idx = 1 - player_idx if len(agent_list) == 2 else 0
+                    if peer_idx != player_idx:
+                        obs_dict_peer = self.openspiel_observation_to_dict(peer_idx, str(self.env))
+                        obs_dict_peer['env_name'] = self.game_name
+
+                        legal_actions_peer = self.env.legal_actions(peer_idx)
+                        obs_dict_peer['openspiel_legal_actions'] = legal_actions_peer
+                        valid_action_peer = [self.env.action_to_string(a) for a in legal_actions_peer]
+                        obs_dict_peer['legal_moves'] = self.openspiel_action_to_agent(valid_action_peer)
+
+                        chat_history_peer = chat_channel.get_recent_window(peer_idx)
+                        msg_peer, _ = agent_list[peer_idx].chat_step(obs_dict_peer, chat_history_peer)
+                        if msg_peer:
+                            current_round = (num_step // self.env.num_players()) + 1
+                            chat_channel.add_message(peer_idx, msg_peer, round_idx=current_round)
+                
                 # init step
                 _step = Step(agent_list[player_idx].agent_name)
                 _step.set_model_name(model_list[player_idx].nick_name)
@@ -135,6 +202,8 @@ class OpenSpielGame:
 
                 observation_dict['legal_moves'] = valid_action
                 observation_dict['env_name'] = self.game_name
+                observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
+                
                 if len(legal_actions) != 1:
                     action, query_list = agent_list[player_idx].step(
                         observation_dict)
@@ -205,6 +274,63 @@ class OpenSpielGame:
             self.logger.info(f"The winner is {_match.winner}")
         else:
             self.logger.info("There are no winner in this game.")
+            
+        # [LTM Integration] Post-game updates
+        q_mem = self.quick_action_memory_for_llm
+        max_turns = max(len(q_mem.get(0, [])), len(q_mem.get(1, []))) if q_mem else 0
+        
+        for agent_idx, agent in enumerate(agent_list):
+            if hasattr(agent, 'post_game_update'):
+                agent_history = ""
+                
+                chat_enabled = all(getattr(a, "enable_chat", False) for a in agent_list)
+                chat_by_round = {}
+                if chat_enabled:
+                    for msg in chat_channel.transcript:
+                        r = msg.get("round", 1)
+                        if r not in chat_by_round:
+                            chat_by_round[r] = []
+                        chat_by_round[r].append(msg)
+                
+                for t in range(max_turns):
+                    r = t + 1
+                    agent_history += f"Round {r}:\n"
+                    round_chat = chat_by_round.get(r, [])
+                    
+                    if len(round_chat) > 0:
+                        for msg in round_chat[0:2]:
+                            prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
+                            agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
+                            
+                    if t < len(q_mem.get(0, [])):
+                        prefix = "You" if agent_idx == 0 else "Opponent"
+                        agent_history += f"  [Move] {prefix}: {q_mem[0][t]}\n\n"
+                    else:
+                        agent_history += "\n"
+                        
+                    if len(round_chat) > 2:
+                        for msg in round_chat[2:4]:
+                            prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
+                            agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
+                            
+                    if t < len(q_mem.get(1, [])):
+                        prefix = "You" if agent_idx == 1 else "Opponent"
+                        agent_history += f"  [Move] {prefix}: {q_mem[1][t]}\n\n"
+                    else:
+                        agent_history += "\n"
+                        
+                your_score = results[agent_idx]
+                opp_score = results[1 - agent_idx] if len(results) > 1 else results[0]
+                agent_history += f"Game Outcome: Your score={your_score}, Opponent score={opp_score}"
+                
+                try:
+                    agent.post_game_update(agent_history, final_board_state=str(self.env), env_name=self.game_name)
+                except TypeError:
+                    try:
+                        agent.post_game_update(agent_history, final_board_state=str(self.env))
+                    except TypeError:
+                        # Fallback for agents that don't accept final_board_state
+                        agent.post_game_update(agent_history)
 
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
         return {}

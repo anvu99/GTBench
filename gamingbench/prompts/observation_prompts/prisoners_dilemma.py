@@ -1,6 +1,10 @@
 
 def _construct_head_prompt():
-    pass
+    return 'You and your partner are in the Prisoner\'s Dilemma situation. ' \
+           'Specifically, if you <Testify> against your partner and your partner remains <Silent>, you will go free while your partner will get 3 years in prison on the main charge. ' \
+           'If you remain <Silent> but your partner <Testify> against you, you will serve 3 years in prison and your partner will be set free. ' \
+           'If you and your partner <Testify> against each other, you and your partner will each serve 2 years. \n' \
+           'If both you and your partner remain <Silent>, you and your partner will each server 1 year.'
 
 def construct_observation_prompt(observations):
 
@@ -15,13 +19,7 @@ def construct_observation_prompt(observations):
     else:
         past_round_prompt = ''
 
-    prompt = 'You and your partner are in the Prisoner\'s Dilemma situation. ' \
-             'Specifically, if you <Testify> against your partner and your partner remains <Silent>, you will go free while your partner will get 3 years in prison on the main charge. ' \
-             'If you remain <Silent> but your partner <Testify> against you, you will serve 3 years in prison and your partner will be set free. ' \
-             'If you and your partner <Testify> against each other, you and your partner will each serve 2 years. \n' \
-             'If both you and your partner remain <Silent>, you and your partner will each server 1 year.' \
-             '\n' \
-             f'{past_round_prompt}' \
+    prompt =              f'{past_round_prompt}' \
              f'\n' \
              'In this new round, you and your partner are making decision simultaneously and you do not know your partner\'s decision.' \
              '\n\n' \

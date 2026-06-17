@@ -21,7 +21,7 @@ def construct_observation_prompt(observations):
              f'the 3rd pile has {piles[2]} match(es);\nthe 4th pile has {piles[3]} match(es). \n\n' \
              f'The legal actions are: {legal_move_str}.'
 
-    return _construct_head_prompt() + '\n' + prompt
+    return prompt
 
 
 if __name__ == '__main__':

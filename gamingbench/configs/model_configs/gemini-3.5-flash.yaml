@@ -1,0 +1,7 @@
+llm_model_path: gemini-3.5-flash
+max_tokens: null
+timeout: 120
+temperature: 1.0
+model_type: LLMModel
+nick_name: gemini-3.5-flash
+thinking_budget: 4096

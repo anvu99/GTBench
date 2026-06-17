@@ -15,8 +15,6 @@ def construct_observation_prompt(observations):
     else:
         board_preview = f"The board now looks like :\n{board_str} \nAmong which, the letter 'b' represents black piece, while the letter 'w' represents white piece.\n And the character '.' represents vacant space.\n And the numbers in the board are the indexes of the rows."
 
-    assert len(legal_actions) != 0
-
     if len(opponent_actions) == 0:
         opponent_prompt = 'Your opponent does not have any action so far.'
     else:
@@ -29,9 +27,12 @@ def construct_observation_prompt(observations):
         finished_moves = ', '.join(agent_actions)
         agent_prompt = f'You have finished actions: {finished_moves}.'
 
-    legal_pos = ' or '.join(legal_actions)
-    legal_position_prompt = f'Currently, the legal actions are: {legal_pos}.'
+    if len(legal_actions) == 0:
+        legal_position_prompt = 'Currently, it is not your turn to act.'
+    else:
+        legal_pos = ' or '.join(legal_actions)
+        legal_position_prompt = f'Currently, the legal actions are: {legal_pos}.'
 
-    prompt = f'{_construct_head_prompt()}\n\n{board_preview}\n{opponent_prompt} {agent_prompt}\n\n{legal_position_prompt}'
+    prompt = f'{board_preview}\n{opponent_prompt} {agent_prompt}\n\n{legal_position_prompt}'
 
     return prompt

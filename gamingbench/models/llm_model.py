@@ -15,7 +15,8 @@ class LLMModel(BaseModel):
             max_tokens=self.max_tokens,
             n=n,
             timeout=self.timeout,
-            stop=stop
+            stop=stop,
+            thinking_budget=self.thinking_budget
         )
         generations = responses['generations']
         completion_tokens = responses['completion_tokens']

@@ -11,6 +11,7 @@ class BaseModel(object):
         self.timeout = config.timeout
         self.temperature = config.temperature
         self.nick_name = config.nick_name
+        self.thinking_budget = getattr(config, 'thinking_budget', 0)
 
     def query(self, messages, n, stop, prompt_type):
         pass

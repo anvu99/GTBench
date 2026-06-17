@@ -16,6 +16,6 @@ def construct_observation_prompt(observations):
     
     The legal moves are: {legal_move_str}."""
 
-    return _construct_head_prompt() + '\n' + prompt
+    return prompt
 
 

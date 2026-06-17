@@ -32,4 +32,4 @@ def construct_observation_prompt(observations):
                  f'The legal actions are: {legal_move_str}.'
                  # 'You should call action <Liar> if the opponent called <2 dices, 6 value> in the last round. Because there is no other actions.' \
 
-    return _construct_head_prompt() + '\n' + prompt
+    return prompt

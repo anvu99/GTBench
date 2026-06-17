@@ -14,8 +14,6 @@ def construct_observation_prompt(observations):
     opponent_moves = observations.get('opponent_moves', [])
     self_moves = observations.get('self_moves', [])
 
-    assert len(legal_moves) != 0
-
     if len(opponent_moves) != 0 or len(self_moves) != 0:
         if len(opponent_moves) == 0:
             opponent_prompt = ''
@@ -31,9 +29,12 @@ def construct_observation_prompt(observations):
     else:
         finished_move_prompt = f'You are the first to go.'
 
-    legal_pos = ', '.join(legal_moves)
-    legal_position_prompt = f'Currently, the legal actions are {legal_pos}.'
+    if len(legal_moves) == 0:
+        legal_position_prompt = 'Currently, it is not your turn to act.'
+    else:
+        legal_pos = ', '.join(legal_moves)
+        legal_position_prompt = f'Currently, the legal actions are {legal_pos}.'
 
-    prompt = f'{_construct_head_prompt()}\n{finished_move_prompt}\n{legal_position_prompt}'
+    prompt = f'{finished_move_prompt}\n{legal_position_prompt}'
 
     return prompt

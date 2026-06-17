@@ -103,6 +103,11 @@ def parallel_func(worker, arg_list, num_workers=20):
     return results
 
 
+def strip_thinking_block(text: str) -> str:
+    import re
+    return re.sub(r'<GEMINI_THOUGHT>.*?</GEMINI_THOUGHT>\s*', '', text, flags=re.DOTALL).strip()
+
+
 def load_jsonl(path):
     result = []
     with open(path, 'r') as f:

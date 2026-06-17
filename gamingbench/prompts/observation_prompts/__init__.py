@@ -29,3 +29,6 @@ mapping = {
 def construct_observation_prompt(observations, environment_name):
 
     return mapping[environment_name].construct_observation_prompt(observations)
+
+def construct_game_intro(environment_name):
+    return mapping[environment_name]._construct_head_prompt()

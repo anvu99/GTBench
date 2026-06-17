@@ -68,7 +68,7 @@ def construct_observation_prompt(observations):
     else:
         raise ValueError
 
-    return _construct_head_prompt() + '\n' + stage_prompt + '\n' + item_pool_prompt + '\n' + value_vector + '\n' + last_situation_prompt + '\n' + query_prompt
+    return stage_prompt + '\n' + item_pool_prompt + '\n' + value_vector + '\n' + last_situation_prompt + '\n' + query_prompt
 
 if __name__ == '__main__':
     observation = {

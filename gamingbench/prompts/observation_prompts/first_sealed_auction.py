@@ -18,4 +18,4 @@ def construct_observation_prompt(observations):
              f'Your opponent also has an expected valuation and you don not know it.' \
              f'\n\n' \
              f'The legal actions are: {legal_move_str}. '
-    return _construct_head_prompt() + '\n' + prompt
+    return prompt
