@@ -2,6 +2,7 @@ import copy
 import os.path
 import argparse
 import pathlib
+import queue
 import threading
 from gamingbench.utils import utils
 from gamingbench.environments.base_env import BaseGameEnv
@@ -43,9 +44,35 @@ def get_args():
     parser.add_argument('--num-workers', default=1, type=int)
     parser.add_argument('--threshold-matches', default=50, type=int)
     parser.add_argument('--enable-chat', default=False, action='store_true', help='Enable chat feature for agents')
+    parser.add_argument('--batch-size', type=int, default=1,
+                        help='Number of games per LTM update batch. Default 1 = update after every game (existing behaviour).')
     args = parser.parse_args()
 
     return args
+
+
+def clone_agent_for_batch(original_agent, ltm_snapshot: dict):
+    """Create an independent LTMAgent copy seeded with a frozen LTM snapshot.
+
+    The clone:
+    - Has its own in-memory LTM store pre-loaded from ltm_snapshot (no file I/O during game).
+    - Has batch_mode=True so post_game_update() stores gradient data and returns early.
+    - Does NOT call set_storage_dir() — it never writes to disk (ltm_store_path='/dev/null').
+    """
+    clone = copy.deepcopy(original_agent)
+    clone.ltm_store.store = dict(ltm_snapshot.get('ltm', {}))
+    clone.ltm_store.scores = {
+        k: dict(v) for k, v in ltm_snapshot.get('scores', {}).items()
+    }
+    # Snapshot self-LTM (no scores — EMA not used for self-LTM)
+    clone.self_ltm_store.store = dict(ltm_snapshot.get('self_ltm', {}))
+    clone.self_ltm_store.scores = {}
+    # '/dev/null' prevents any file load/save; reset_game_state() guards against this path.
+    clone.ltm_store_path = '/dev/null'
+    clone.self_ltm_store_path = '/dev/null'
+    clone.batch_mode = True
+    clone._last_batch_result = None
+    return clone
 
 
 def run_game(game_name):
@@ -105,8 +132,105 @@ def run_game(game_name):
     game_env.set_game(game)
 
     lock = threading.Lock()
+    batch_size = getattr(args, 'batch_size', 1)
 
-    if args.num_workers == 1:
+    if batch_size > 1:
+        # ── Batch mode ────────────────────────────────────────────────────────
+        # Games within a batch run in parallel; batches are sequential.
+        # Each game gets its own independent agent clone pre-seeded with the
+        # same LTM snapshot — no shared mutable state across parallel games.
+        #
+        # Deduplicate by ltm_store_path: agents and reversed_agents typically
+        # contain 2 LTMAgent instances with the same path. Only flush through
+        # one to avoid applying the same gradients twice.
+        seen_ltm_paths = set()
+        ltm_agents = []
+        for a in agents + reversed_agents:
+            if hasattr(a, 'flush_batch_updates') and a.ltm_store_path not in seen_ltm_paths:
+                seen_ltm_paths.add(a.ltm_store_path)
+                ltm_agents.append(a)
+        results = []
+        for batch_start in range(0, args.num_matches, batch_size):
+            batch_end = min(batch_start + batch_size, args.num_matches)
+            batch_q = queue.Queue()  # thread-safe gradient data collector
+
+            # Freeze the current LTM store state for all games in this batch
+            ltm_snapshot = {'ltm': {}, 'scores': {}, 'self_ltm': {}}
+            if ltm_agents:
+                ref = ltm_agents[0]
+                ltm_snapshot['ltm'] = dict(ref.ltm_store.store)
+                ltm_snapshot['scores'] = {k: dict(v) for k, v in ref.ltm_store.scores.items()}
+                if hasattr(ref, 'self_ltm_store'):
+                    ltm_snapshot['self_ltm'] = dict(ref.self_ltm_store.store)
+
+            # Build per-game args, each with its own agent clones
+            batch_args = []
+            for match_idx in range(batch_start, batch_end):
+                fresh_agents = [
+                    clone_agent_for_batch(a, ltm_snapshot)
+                    if hasattr(a, 'flush_batch_updates') else copy.deepcopy(a)
+                    for a in agents
+                ]
+                fresh_reversed = [
+                    clone_agent_for_batch(a, ltm_snapshot)
+                    if hasattr(a, 'flush_batch_updates') else copy.deepcopy(a)
+                    for a in reversed_agents
+                ]
+                for fa, m in zip(fresh_agents, models):
+                    fa.set_model(m)
+                    fa.enable_chat = getattr(args, 'enable_chat', False)
+                for fa, m in zip(fresh_reversed, reversed_models):
+                    fa.set_model(m)
+                    fa.enable_chat = getattr(args, 'enable_chat', False)
+
+                batch_args.append({
+                    'match_idx': match_idx,
+                    'game_name': game_name,
+                    'agents': fresh_agents,
+                    'reversed_agents': fresh_reversed,
+                    'models': models,
+                    'reversed_models': reversed_models,
+                    'result_path': result_path,
+                    'args': args,
+                    'lock': lock,
+                    'batch_queue': batch_q,
+                })
+
+            # Run all N games in the batch in parallel; blocks until all complete
+            batch_results = utils.parallel_func(
+                run_match, batch_args,
+                num_workers=min(args.num_workers, len(batch_args))
+            )
+            results.extend(batch_results)
+
+            # Collect gradient data deposited by each game's agent
+            gradient_data = []
+            while not batch_q.empty():
+                gradient_data.append(batch_q.get())
+
+            # Flush: single unified synthesis + EMA for all N games
+            if gradient_data and ltm_agents:
+                # Borrow opponent context (current_opponent_key / game_intro) from
+                # the first successful clone that actually played.
+                # Must check BOTH 'agents' and 'reversed_agents' because odd matches
+                # (exchange_first_player) run with reversed_agents.
+                for ba in batch_args:
+                    sample = next(
+                        (a for a in ba['agents'] + ba['reversed_agents']
+                         if hasattr(a, 'current_opponent_key') and a.current_opponent_key),
+                        None
+                    )
+                    if sample:
+                        for ltm_agent in ltm_agents:
+                            ltm_agent.current_opponent_key = sample.current_opponent_key
+                            ltm_agent.current_game_intro  = sample.current_game_intro
+                        break
+                for ltm_agent in ltm_agents:
+                    ltm_agent.flush_batch_updates(gradient_data)
+
+        results = [r[0] for r in results]
+
+    elif args.num_workers == 1:
         results = []
         for match_idx in range(args.num_matches):
             match_arg = {
@@ -147,6 +271,7 @@ def run_game(game_name):
         # save to jsonl
         results = [r[0] for r in results]
     # utils.save_jsonl(results, result_path)
+
 
 
 def pick_out_invalid_matches(results):
@@ -198,13 +323,39 @@ def run_match(params):
         for config_path in args.model_configs:
             game_env.append_models_config(utils.load_config(config_path))
 
-    game_env.play()
-    res = game_env.history_tracker.to_dict()
+    # ── Per-game log file ────────────────────────────────────────────────────
+    # e.g. ltm_agent_gemini-3_prompt_agent_gemini-3_game_0003.log
+    run_name = os.path.splitext(os.path.basename(result_path))[0]
+    per_game_log = os.path.join(
+        os.path.dirname(result_path),
+        f'{run_name}_game_{match_idx:04d}.log'
+    )
+    game_log_handler = utils.add_game_log_handler(per_game_log)
+
+    try:
+        game_env.play()
+        res = game_env.history_tracker.to_dict()
+    finally:
+        utils.remove_game_log_handler(game_log_handler)
+
     with params['lock']:
         with open(result_path, 'a') as file:
             file.writelines(json.dumps(res) + '\n')
 
+    # ── Batch mode: deposit gradient data into the shared queue ──────────────
+    # Check BOTH agents and reversed_agents: for odd matches (exchange_first_player)
+    # the game runs with reversed_agents, so the LTM clone in reversed_agents has
+    # the _last_batch_result, not the one in agents.
+    batch_queue = params.get('batch_queue')
+    if batch_queue is not None:
+        all_agents_in_match = list(params.get('agents', [])) + list(params.get('reversed_agents', []))
+        for agent in all_agents_in_match:
+            if getattr(agent, 'batch_mode', False) and agent._last_batch_result is not None:
+                batch_queue.put(agent._last_batch_result)
+                agent._last_batch_result = None
+
     return (res, params)
+
 
 
 def main(args):

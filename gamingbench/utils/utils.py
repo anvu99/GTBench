@@ -2,6 +2,7 @@
 import os
 import logging
 import random
+import threading
 import numpy as np
 import yaml
 import concurrent
@@ -151,3 +152,45 @@ class LLMBenchLogger:
         logger.addHandler(fh)
 
         return logger
+
+
+class _ThreadFilter(logging.Filter):
+    """Allows a FileHandler to receive records only from the thread that created it.
+
+    Used to route per-game log messages to a game-specific file even when
+    multiple games run in parallel threads sharing the same root logger.
+    """
+    def __init__(self, thread_id: int):
+        super().__init__()
+        self._thread_id = thread_id
+
+    def filter(self, record):
+        return threading.current_thread().ident == self._thread_id
+
+
+def add_game_log_handler(log_path: str) -> logging.FileHandler:
+    """Attach a per-game FileHandler to the shared logger for the calling thread.
+
+    The handler is thread-filtered: only records emitted by the calling thread
+    are written to log_path.  Call remove_game_log_handler() when the game ends.
+
+    Args:
+        log_path: Absolute path of the per-game .log file to create.
+
+    Returns:
+        The FileHandler that was added (needed to remove it later).
+    """
+    logger = logging.getLogger(__name__)
+    fh = logging.FileHandler(log_path)
+    fh.setFormatter(logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+    fh.addFilter(_ThreadFilter(threading.current_thread().ident))
+    logger.addHandler(fh)
+    return fh
+
+
+def remove_game_log_handler(fh: logging.FileHandler) -> None:
+    """Remove and close the per-game FileHandler returned by add_game_log_handler()."""
+    logger = logging.getLogger(__name__)
+    logger.removeHandler(fh)
+    fh.close()
