@@ -69,7 +69,7 @@ Analyze the game and propose updates using the following 4 tags:
 - [REMOVE]: Identify a signal whose core observed behavior (When/What) is directly contradicted by the ground truth, or whose entire signal — even after potential modification — is net harmful to retain. Do NOT use [REMOVE] if only the Policy is wrong; use [MODIFY] to fix the Policy instead. Do NOT use [REMOVE] simply because a signal's trigger was not encountered this game — absence of evidence is not contradiction.
 - [ADD]: Define a completely new observed behavior not yet covered by any signal in the current database. If an existing signal partially covers the behavior but one or more fields are incorrect, use [MODIFY] instead of adding a duplicate.
 - [MODIFY]: Identify an existing signal worth keeping, but whose one or more fields are inaccurate, misleading, too general, or too specific based on the current game evidence. Prefer [MODIFY] over [ADD] when the behavior is already partially captured by an existing signal. Only list the fields that are changing; omit all unchanged fields.
-- [MERGE]: Identify two existing signals that share the same trigger condition or consistently co-occur, and would produce a clearer and more actionable unified policy as a single signal. Do NOT merge signals that share a surface theme but have different triggers or require different responses — merging those would weaken both policies.
+- [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior. Use [MERGE] liberally: two signals should be merged if a single, unified policy would serve the agent equally well in both triggering situations. Prefer [MERGE] over a combination of [MODIFY]+[ADD] whenever the new game evidence is already partially captured by two separate existing signals that happen to co-occur or have similar triggers. Do NOT limit merging to signals with identical trigger wording — trigger conditions are considered equivalent if they describe the same underlying game situation from different angles. Do NOT merge signals that require clearly distinct responses where unifying the policy would weaken one of them.
 
 You may include as many update entries as necessary. A single gradient report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, etc., depending on what the game data supports.
 
@@ -201,7 +201,10 @@ When the same signal receives conflicting instructions across the {n} gradient r
 
 --- SYNTHESIS QUALITY RULES ---
 - **Abstract and Generalize**: Do not include game-specific details (specific round numbers, one-off board states). Produce generalized behavioral descriptions that apply across games.
-- **Consolidate**: Merge new proposals into existing signals if they describe similar behaviors rather than creating duplicates. Only create a distinct new signal if it captures a clearly different behavioral pattern.
+- **Merge-First Discipline**: Before finalizing the output, scan the *entire* resulting database for signals that describe variations of the same underlying behavior. Two signals should be merged into one if a single unified policy would serve the agent equally well in both triggering situations. Do not require identical trigger wording — triggers are equivalent if they describe the same underlying game situation from different angles. Emit a [MERGE] for any such pair you identify, even if the gradient reports did not propose one.
+- **Prefer [MODIFY] over [ADD]**: If a proposed new signal partially overlaps an existing one, expand the existing signal’s When/What/Policy to cover both cases instead of inserting a duplicate.
+- **Distinct signals only**: Only retain a signal as a separate entry if its trigger condition and required response are clearly distinct from every other signal in the database such that merging would weaken the policy.
+
 
 Each synthesized memory entry MUST use this format:
 
@@ -280,7 +283,7 @@ Analyze the game and propose updates using the following 4 tags:
 - [REMOVE]: Identify a signal whose core observed behavior (When/What) is directly contradicted by the ground truth, or whose signal is net harmful to retain. Do NOT use [REMOVE] if only the Policy is wrong; use [MODIFY] instead. Do NOT use [REMOVE] simply because a signal's trigger was not encountered this game.
 - [ADD]: Define a completely new self-pattern not yet covered by any signal. If an existing signal partially covers it, use [MODIFY] instead.
 - [MODIFY]: Identify an existing signal worth keeping but with inaccurate, misleading, too general, or too specific fields. Only list fields that are changing.
-- [MERGE]: Identify two existing signals that share the same trigger condition and would produce a clearer unified policy as one signal.
+- [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior. Use [MERGE] liberally: two signals should be merged if a single, unified policy would serve the agent equally well in both triggering situations. Prefer [MERGE] over a combination of [MODIFY]+[ADD] whenever the new game evidence is already partially captured by two separate existing signals that happen to co-occur or have similar triggers. Do NOT limit merging to signals with identical trigger wording — trigger conditions are considered equivalent if they describe the same underlying game situation from different angles. Do NOT merge signals that require clearly distinct responses where unifying the policy would weaken one of them.
 
 You may include as many update entries as necessary.
 
@@ -405,7 +408,10 @@ When the same signal receives conflicting instructions across the {n} gradient r
 
 --- SYNTHESIS QUALITY RULES ---
 - **Abstract and Generalize**: Do not include game-specific details. Produce generalized descriptions that apply across games.
-- **Consolidate**: Merge new proposals into existing signals if they describe similar behaviors rather than creating duplicates.
+- **Merge-First Discipline**: Before finalizing the output, scan the *entire* resulting database for signals that describe variations of the same underlying self-pattern. Two signals should be merged into one if a single unified policy would serve the agent equally well in both triggering situations. Do not require identical trigger wording — triggers are equivalent if they describe the same underlying game situation from different angles. Emit a [MERGE] for any such pair you identify, even if the gradient reports did not propose one.
+- **Prefer [MODIFY] over [ADD]**: If a proposed new signal partially overlaps an existing one, expand the existing signal’s When/What/Policy to cover both cases instead of inserting a duplicate.
+- **Distinct signals only**: Only retain a signal as a separate entry if its trigger condition and required response are clearly distinct from every other signal in the database such that merging would weaken the policy.
+
 
 Each synthesized memory entry MUST use this format:
 
