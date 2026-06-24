@@ -1,0 +1,4 @@
+agent_name: SlidingWindowAgent
+num_generations: 1
+majority_vote: False
+sw_store_path: sw_store.json

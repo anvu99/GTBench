@@ -1,13 +1,25 @@
 import os
 import time
 import random
-from langchain.chat_models import ChatOpenAI, ChatAnyscale
-from langchain_community.chat_models import ChatOpenAI, ChatAnyscale
-from langchain_community.llms import DeepInfra
-from langchain.schema import SystemMessage, HumanMessage, AIMessage
+try:
+    from langchain_community.chat_models import ChatOpenAI, ChatAnyscale
+except ImportError:
+    ChatOpenAI = None
+    ChatAnyscale = None
 
-from google import genai
-from google.genai import types
+try:
+    from langchain_community.llms import DeepInfra
+except ImportError:
+    DeepInfra = None
+
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
+
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:
+    genai = None
+    types = None
 
 
 def write_to_file(file_path, content):
@@ -15,9 +27,22 @@ def write_to_file(file_path, content):
         file.write(content)
 
 
+_gemini_client = None
+
+def _get_gemini_client():
+    global _gemini_client
+    if _gemini_client is None:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if api_key:
+            _gemini_client = genai.Client(api_key=api_key)
+        else:
+            _gemini_client = genai.Client()
+    return _gemini_client
+
+
 def chat_llm(messages, model, temperature, max_tokens, n, timeout, stop, return_tokens=False, chat_seed=0, thinking_budget=0):
     if "gemini" in model.lower():
-        client = genai.Client()
+        client = _get_gemini_client()
         
         system_instruction = None
         contents = []

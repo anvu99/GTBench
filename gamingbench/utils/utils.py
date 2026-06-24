@@ -105,8 +105,22 @@ def parallel_func(worker, arg_list, num_workers=20):
 
 
 def strip_thinking_block(text: str) -> str:
-    import re
-    return re.sub(r'<GEMINI_THOUGHT>.*?</GEMINI_THOUGHT>\s*', '', text, flags=re.DOTALL).strip()
+    # Strip Gemini thought blocks
+    if '</GEMINI_THOUGHT>' in text:
+        text = text.rsplit('</GEMINI_THOUGHT>', 1)[-1]
+    elif '<GEMINI_THOUGHT>' in text:
+        text = text.split('<GEMINI_THOUGHT>', 1)[0]
+
+    # DeepSeek/Qwen3 sometimes start generation AFTER the <think> tag,
+    # meaning the output only contains the closing </think> tag.
+    if '</think>' in text:
+        # Split on the closing tag and keep everything after the final one
+        text = text.rsplit('</think>', 1)[-1]
+    elif '<think>' in text:
+        # Handle truncated/unclosed <think> blocks
+        text = text.split('<think>', 1)[0]
+        
+    return text.strip()
 
 
 def load_jsonl(path):

@@ -2,6 +2,7 @@ import numpy as np
 from typing import List
 from gamingbench.utils.history_tracker import GameMatch, Step
 from gamingbench.utils import utils
+import copy
 from gamingbench.games.openspiel_adapter import OpenSpielGame
 import re
 
@@ -21,8 +22,8 @@ class Nim(OpenSpielGame):
         numbers = openspiel_obs.split(' ')
         numbers = numbers[1:]
         res = {
-            'opponent_moves': self.quick_action_memory_for_llm.get(opponent_idx, []),
-            'self_moves': self.quick_action_memory_for_llm.get(current_player_idx, []),
+            'opponent_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(opponent_idx, [])),
+            'self_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(current_player_idx, [])),
             'piles': numbers
         }
         return res

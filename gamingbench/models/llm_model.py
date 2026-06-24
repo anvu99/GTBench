@@ -1,5 +1,4 @@
 from gamingbench.models.base_model import BaseModel
-from gamingbench.chat.chat import chat_llm
 
 
 class LLMModel(BaseModel):
@@ -7,6 +6,7 @@ class LLMModel(BaseModel):
         super().__init__(config)
 
     def query(self, messages, n, stop, prompt_type):
+        from gamingbench.chat.chat import chat_llm
         assert prompt_type in ['move', 'plan', 'vote']
         responses = chat_llm(
             messages=messages,

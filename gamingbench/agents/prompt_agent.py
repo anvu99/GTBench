@@ -73,6 +73,10 @@ class PromptAgent(BaseAgent):
 
         step_instruct = self.step_prompt_constructor(observations)
         step_prompt = step_instruct['prompt']
+        
+        if getattr(self, "think_further", False):
+            step_prompt += "\n\nBefore generating your action, carefully think multiple steps ahead. Anticipate the opponent's likely responses to your move, and consider long-term strategic implications rather than just immediate tactical gains."
+
         observation_prompt = observation_prompt + '\n' + step_prompt
         regex = step_instruct['regex']
 

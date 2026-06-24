@@ -10,10 +10,13 @@ def construct_observation_prompt(observations):
     opponent_actions = observations.get('opponent_moves', [])
     agent_actions = observations.get('self_moves', [])
     board_str = observations.get('board', '')
+    player_idx = observations.get('player_idx', 0)
+    symbol = "Black ('b')" if player_idx == 0 else "White ('w')"
+
     if board_str == '':
-        board_preview = ''
+        board_preview = f"You are playing as {symbol}."
     else:
-        board_preview = f"The board now looks like :\n{board_str} \nAmong which, the letter 'b' represents black piece, while the letter 'w' represents white piece.\n And the character '.' represents vacant space.\n And the numbers in the board are the indexes of the rows."
+        board_preview = f"You are playing as {symbol}.\nThe board now looks like :\n{board_str} \nAmong which, the letter 'b' represents black piece, while the letter 'w' represents white piece.\n And the character '.' represents vacant space.\n And the numbers in the board are the indexes of the rows."
 
     if len(opponent_actions) == 0:
         opponent_prompt = 'Your opponent does not have any action so far.'
@@ -36,3 +39,8 @@ def construct_observation_prompt(observations):
     prompt = f'{board_preview}\n{opponent_prompt} {agent_prompt}\n\n{legal_position_prompt}'
 
     return prompt
+
+def _construct_game_history_legend():
+    return """- [Player Context]: States which piece color "You" and "Opponent" correspond to, and which direction they advance.
+- [Position Legend]: Explains how to read the [Position] lines.
+- [Position]: The board layout at the moment that player had to make their decision (before the move was executed). Rows listed top-to-bottom (Row 8 to Row 1); columns a-c left to right within each row. 'b'=Black, 'w'=White, '.'=empty."""

@@ -7,6 +7,7 @@ def run_self_gradient_engine(
     game_history: str,
     window_summaries: str,
     current_self_ltm: str,
+    game_history_legend: str
 ) -> str:
     """Runs the self-gradient engine to analyze the agent's own play patterns.
 
@@ -23,6 +24,7 @@ def run_self_gradient_engine(
         game_history=game_history,
         window_summaries=window_summaries,
         current_self_ltm=current_self_ltm,
+        game_history_legend=game_history_legend
     )
 
     messages = [

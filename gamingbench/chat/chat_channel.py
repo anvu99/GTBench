@@ -1,5 +1,5 @@
 class ChatChannel:
-    def __init__(self, window_size=20):
+    def __init__(self, window_size=10):
         self.transcript = []
         self.window_size = window_size
 

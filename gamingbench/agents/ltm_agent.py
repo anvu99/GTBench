@@ -465,8 +465,10 @@ class LTMAgent(PromptAgent):
         if not self.current_opponent_key:
             return
 
-        # Trigger a final summarization if we have un-summarized moves
-        if self.move_count > 0 and self.move_count % self.summarize_every != 0:
+        # Trigger a final summarization if we have un-summarized moves.
+        # We compare total moves made against the number of moves already summarized
+        # to catch edge cases where the game ends exactly on a summarize_every boundary.
+        if self.move_count > len(self.window_summaries) * self.summarize_every:
             self._run_final_summarization(game_history, final_board_state, env_name)
 
         self.logger.info('-' * 20 + f'{self.agent_name} Post-Game LTM Update' + '-' * 20)
@@ -474,48 +476,109 @@ class LTMAgent(PromptAgent):
         window_summaries_str = "\n\n".join(self.window_summaries) if self.window_summaries else "No window summaries recorded."
 
         # ── Gradient Engine ──────────────────────────────────────────────────
-        # Returns (structural_report, game_scores) where:
-        #   structural_report: ADD/MODIFY/REMOVE/MERGE entries for the Synthesizer
-        #   game_scores: {signal_name -> float} parsed from ### Correctness Scores
-        structural_report, game_scores = run_gradient_engine(
-            model=self.model,
-            game_intro=self.current_game_intro or "Game rules unavailable.",
-            game_history=game_history,
-            window_summaries=window_summaries_str,
-            current_ltm=current_ltm
-        )
+        from concurrent.futures import ThreadPoolExecutor
+        
+        from gamingbench.prompts.observation_prompts import construct_game_history_legend
+        try:
+            game_history_legend = construct_game_history_legend(env_name)
+        except Exception:
+            game_history_legend = "Game history legend unavailable."
+            
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            future_opp = ex.submit(
+                run_gradient_engine,
+                model=self.model,
+                game_intro=self.current_game_intro or "Game rules unavailable.",
+                game_history=game_history,
+                window_summaries=window_summaries_str,
+                current_ltm=current_ltm,
+                game_history_legend=game_history_legend
+            )
+            
+            current_self_ltm = self.self_ltm_store.get("__self__") or "(No self-memory yet)"
+            future_self = ex.submit(
+                run_self_gradient_engine,
+                model=self.model,
+                game_intro=self.current_game_intro or "Game rules unavailable.",
+                game_history=game_history,
+                window_summaries=window_summaries_str,
+                current_self_ltm=current_self_ltm,
+                game_history_legend=game_history_legend
+            )
+            
+            structural_report, game_scores = future_opp.result()
+            self_structural_report = future_self.result()
+
         self.logger.info(f'Gradient Report:\n{structural_report}')
         self.logger.info(f'Correctness Scores this game: {game_scores}')
-
-        # ── Self Gradient Engine ──────────────────────────────────────────────
-        current_self_ltm = self.self_ltm_store.get("__self__") or "(No self-memory yet)"
-        self_structural_report = run_self_gradient_engine(
-            model=self.model,
-            game_intro=self.current_game_intro or "Game rules unavailable.",
-            game_history=game_history,
-            window_summaries=window_summaries_str,
-            current_self_ltm=current_self_ltm,
-        )
         self.logger.info(f'Self Gradient Report:\n{self_structural_report}')
+        grad_prompt = None
+        self_grad_prompt = None
+        if getattr(self, 'game_count', 0) == 1:
+            grad_prompt = (self.current_game_intro or "Game rules unavailable.") + "\n\n" + GRADIENT_ENGINE_PROMPT.format(
+                game_history=game_history,
+                window_summaries=window_summaries_str,
+                current_ltm=current_ltm,
+                game_history_legend=game_history_legend
+            )
+            self_grad_prompt = (self.current_game_intro or "Game rules unavailable.") + "\n\n" + __import__('gamingbench.ltm.prompts', fromlist=['SELF_GRADIENT_ENGINE_PROMPT']).SELF_GRADIENT_ENGINE_PROMPT.format(
+                game_history=game_history,
+                window_summaries=window_summaries_str,
+                current_self_ltm=current_self_ltm,
+                game_history_legend=game_history_legend
+            )
 
         # ── Batch mode early-out ─────────────────────────────────────────────
         # Store gradient data for the batch runner and defer synthesis.
         if self.batch_mode:
             self._last_batch_result = {
                 "opp": (structural_report, game_scores),
-                "self": self_structural_report
+                "self": self_structural_report,
+                "opp_prompt": grad_prompt,
+                "self_prompt": self_grad_prompt
             }
             self.logger.info('Batch mode: opponent and self gradient data collected, synthesis deferred.')
             return
 
-        # ── TGD Synthesis ────────────────────────────────────────────────────
-        new_ltm = run_tgd_synthesis(
-            model=self.model,
-            game_intro=self.current_game_intro or "Game rules unavailable.",
-            current_ltm=current_ltm,
-            gradient_reports=[structural_report],
-        )
+        # ── Trace Logging (Gradient Reports) ──────────────────────────────────
+        log_file = self.ltm_store_path.replace('.json', '_trace.log')
+        with open(log_file, "a") as f:
+            f.write(f"=== GAME {getattr(self, 'game_count', 0)} POST-GAME GRADIENT REPORT ===\n")
+            if grad_prompt:
+                f.write(f"PROMPT:\n{grad_prompt}\n")
+            f.write(f"RESPONSE (structural):\n{structural_report}\n")
+            f.write(f"CORRECTNESS SCORES (parsed): {game_scores}\n")
+            f.write("=" * 50 + "\n\n")
+
+            f.write(f"=== GAME {getattr(self, 'game_count', 0)} SELF POST-GAME GRADIENT REPORT ===\n")
+            if self_grad_prompt:
+                f.write(f"PROMPT:\n{self_grad_prompt}\n")
+            f.write(f"RESPONSE:\n{self_structural_report}\n")
+            f.write("=" * 50 + "\n\n")
+
+        # ── TGD Synthesis & Self TGD Synthesis (Parallel) ─────────────────────
+        from concurrent.futures import ThreadPoolExecutor
+        
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            future_new_ltm = ex.submit(
+                run_tgd_synthesis,
+                model=self.model,
+                game_intro=self.current_game_intro or "Game rules unavailable.",
+                current_ltm=current_ltm,
+                gradient_reports=[structural_report]
+            )
+            future_new_self_ltm = ex.submit(
+                run_self_tgd_synthesis,
+                model=self.model,
+                game_intro=self.current_game_intro or "Game rules unavailable.",
+                current_self_ltm=current_self_ltm,
+                gradient_reports=[self_structural_report]
+            )
+            new_ltm = future_new_ltm.result()
+            new_self_ltm = future_new_self_ltm.result()
+
         self.logger.info(f'New LTM:\n{new_ltm}')
+        self.logger.info(f'New Self LTM:\n{new_self_ltm}')
 
         # ── Confidence Score Update ──────────────────────────────────────────
         old_scores = self.ltm_store.get_scores(self.current_opponent_key)
@@ -540,20 +603,8 @@ class LTMAgent(PromptAgent):
 
         self.logger.info(f'Confidence scores after update: {new_scores}')
 
-        # ── Trace Logging ────────────────────────────────────────────────────
-        log_file = self.ltm_store_path.replace('.json', '_trace.log')
+        # ── Trace Logging (TGD Synthesis) ────────────────────────────────────
         with open(log_file, "a") as f:
-            f.write(f"=== GAME {getattr(self, 'game_count', 0)} POST-GAME GRADIENT REPORT ===\n")
-            if getattr(self, 'game_count', 0) == 1:
-                grad_prompt = (self.current_game_intro or "Game rules unavailable.") + "\n\n" + GRADIENT_ENGINE_PROMPT.format(
-                    game_history=game_history,
-                    window_summaries=window_summaries_str,
-                    current_ltm=current_ltm
-                )
-                f.write(f"PROMPT:\n{grad_prompt}\n")
-            f.write(f"RESPONSE (structural):\n{structural_report}\n")
-            f.write(f"CORRECTNESS SCORES (parsed): {game_scores}\n")
-            f.write("=" * 50 + "\n\n")
 
             f.write(f"=== GAME {getattr(self, 'game_count', 0)} POST-GAME TGD SYNTHESIS ===\n")
             if getattr(self, 'game_count', 0) == 1:
@@ -577,28 +628,10 @@ class LTMAgent(PromptAgent):
 
 
 
-        # ── Self TGD Synthesis ────────────────────────────────────────────────
-        new_self_ltm = run_self_tgd_synthesis(
-            model=self.model,
-            game_intro=self.current_game_intro or "Game rules unavailable.",
-            current_self_ltm=current_self_ltm,
-            gradient_reports=[self_structural_report],
-        )
-        self.logger.info(f'New Self LTM:\n{new_self_ltm}')
 
-        # ── Trace Logging (self) ──────────────────────────────────────────────
+
+        # ── Trace Logging (Self TGD Synthesis) ────────────────────────────────
         with open(log_file, "a") as f:
-            f.write(f"=== GAME {getattr(self, 'game_count', 0)} SELF POST-GAME GRADIENT REPORT ===\n")
-            if getattr(self, 'game_count', 0) == 1:
-                from gamingbench.ltm.self_gradient_engine import run_self_gradient_engine as _sge
-                self_grad_prompt = (self.current_game_intro or "Game rules unavailable.") + "\n\n" + __import__('gamingbench.ltm.prompts', fromlist=['SELF_GRADIENT_ENGINE_PROMPT']).SELF_GRADIENT_ENGINE_PROMPT.format(
-                    game_history=game_history,
-                    window_summaries=window_summaries_str,
-                    current_self_ltm=current_self_ltm,
-                )
-                f.write(f"PROMPT:\n{self_grad_prompt}\n")
-            f.write(f"RESPONSE:\n{self_structural_report}\n")
-            f.write("=" * 50 + "\n\n")
 
             f.write(f"=== GAME {getattr(self, 'game_count', 0)} SELF POST-GAME TGD SYNTHESIS ===\n")
             f.write(f"RESPONSE:\n{new_self_ltm}\n")
@@ -638,14 +671,37 @@ class LTMAgent(PromptAgent):
         )
         current_ltm = self.ltm_store.get(self.current_opponent_key) or '(No memory yet)'
 
-        # ── Single unified TGD Synthesis (opponent) ───────────────────────────
-        new_ltm = run_tgd_synthesis(
-            model=self.model,
-            game_intro=self.current_game_intro or 'Game rules unavailable.',
-            current_ltm=current_ltm,
-            gradient_reports=structural_reports,
-        )
+        # ── TGD Synthesis & Self TGD Synthesis (Parallel) ─────────────────────
+        from concurrent.futures import ThreadPoolExecutor
+        
+        new_self_ltm = None
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            future_new_ltm = ex.submit(
+                run_tgd_synthesis,
+                model=self.model,
+                game_intro=self.current_game_intro or 'Game rules unavailable.',
+                current_ltm=current_ltm,
+                gradient_reports=structural_reports,
+            )
+            
+            future_new_self_ltm = None
+            if self_reports:
+                current_self_ltm = self.self_ltm_store.get("__self__") or '(No self-memory yet)'
+                future_new_self_ltm = ex.submit(
+                    run_self_tgd_synthesis,
+                    model=self.model,
+                    game_intro=self.current_game_intro or 'Game rules unavailable.',
+                    current_self_ltm=current_self_ltm,
+                    gradient_reports=self_reports,
+                )
+                
+            new_ltm = future_new_ltm.result()
+            if future_new_self_ltm:
+                new_self_ltm = future_new_self_ltm.result()
+
         self.logger.info(f'Batch New LTM (N={n}):\n{new_ltm}')
+        if new_self_ltm:
+            self.logger.info(f'Batch New Self LTM (N={n}):\n{new_self_ltm}')
 
         # ── Batch EMA (opponent only) ─────────────────────────────────────────
         old_scores = self.ltm_store.get_scores(self.current_opponent_key)
@@ -664,33 +720,53 @@ class LTMAgent(PromptAgent):
 
         self.logger.info(f'Batch confidence scores after update: {new_scores}')
 
-        # ── Single unified Self-TGD Synthesis (no EMA) ───────────────────────
-        new_self_ltm = None
-        if self_reports:
-            current_self_ltm = self.self_ltm_store.get("__self__") or '(No self-memory yet)'
-            new_self_ltm = run_self_tgd_synthesis(
-                model=self.model,
-                game_intro=self.current_game_intro or 'Game rules unavailable.',
-                current_self_ltm=current_self_ltm,
-                gradient_reports=self_reports,
-            )
-            self.logger.info(f'Batch New Self LTM (N={n}):\n{new_self_ltm}')
+
 
         # ── Trace log ─────────────────────────────────────────────────────────
         log_file = self.ltm_store_path.replace('.json', '_trace.log')
         with open(log_file, 'a') as f:
+            # Write gradient reports deferred from batch games
+            for i, d in enumerate(gradient_data):
+                if isinstance(d, dict):
+                    f.write(f"=== BATCH GAME {i+1} POST-GAME GRADIENT REPORT ===\n")
+                    if d.get("opp_prompt"):
+                        f.write(f"PROMPT:\n{d['opp_prompt']}\n")
+                    f.write(f"RESPONSE (structural):\n{d['opp'][0]}\n")
+                    f.write(f"CORRECTNESS SCORES (parsed): {d['opp'][1]}\n")
+                    f.write("=" * 50 + "\n\n")
+
+                    if "self" in d:
+                        f.write(f"=== BATCH GAME {i+1} SELF POST-GAME GRADIENT REPORT ===\n")
+                        if d.get("self_prompt"):
+                            f.write(f"PROMPT:\n{d['self_prompt']}\n")
+                        f.write(f"RESPONSE:\n{d['self']}\n")
+                        f.write("=" * 50 + "\n\n")
+
             f.write(f'=== BATCH FLUSH (N={n}) TGD SYNTHESIS ===\n')
-            for i, report in enumerate(structural_reports):
-                f.write(f'--- Game {i + 1} structural report ---\n{report}\n')
-                f.write(f'--- Game {i + 1} correctness scores ---\n{list_of_game_scores[i]}\n')
+            if getattr(self, 'game_count', 0) <= n:
+                from gamingbench.ltm.tgd_synthesizer import _format_gradient_reports
+                import gamingbench.ltm.prompts as prompts
+                tgd_prompt = (self.current_game_intro or 'Game rules unavailable.') + "\n\n" + prompts.TGD_SYNTHESIS_PROMPT.format(
+                    current_ltm=current_ltm,
+                    n=n,
+                    gradient_reports=_format_gradient_reports(structural_reports),
+                )
+                f.write(f"PROMPT:\n{tgd_prompt}\n")
             f.write(f'SYNTHESIZED LTM:\n{new_ltm}\n')
             if auto_removed:
                 f.write(f'AUTO-REMOVED (score < {_AUTO_REMOVE_THRESHOLD}): {auto_removed}\n')
             f.write(f'CONFIDENCE SCORES AFTER BATCH UPDATE: {new_scores}\n')
             if new_self_ltm:
                 f.write(f'=== BATCH FLUSH (N={n}) SELF TGD SYNTHESIS ===\n')
-                for i, report in enumerate(self_reports):
-                    f.write(f'--- Game {i + 1} self-gradient report ---\n{report}\n')
+                if getattr(self, 'game_count', 0) <= n:
+                    from gamingbench.ltm.tgd_synthesizer import _format_gradient_reports
+                    import gamingbench.ltm.prompts as prompts
+                    self_tgd_prompt = (self.current_game_intro or 'Game rules unavailable.') + "\n\n" + prompts.SELF_TGD_SYNTHESIS_PROMPT.format(
+                        current_self_ltm=current_self_ltm,
+                        n=n,
+                        gradient_reports=_format_gradient_reports(self_reports),
+                    )
+                    f.write(f"PROMPT:\n{self_tgd_prompt}\n")
                 f.write(f'SYNTHESIZED SELF LTM:\n{new_self_ltm}\n')
             f.write('=' * 50 + '\n\n')
 

@@ -39,9 +39,11 @@ class BaseAgent(object):
     @staticmethod
     def parse_with_regex(content, regex):
         assert isinstance(content, list)
+        from gamingbench.utils.utils import strip_thinking_block
         results = []
         for c in content:
-            matched = re.findall(regex, c)
+            stripped_c = strip_thinking_block(c)
+            matched = re.findall(regex, stripped_c)
             if len(matched) > 0:
                 results.append(matched)
         return results

@@ -68,6 +68,8 @@ def construct_observation_prompt(observations):
     else:
         raise ValueError
 
+    player_idx = observations.get("player_idx", 0)
+    stage_prompt = f"You are playing as Player {player_idx + 1}.\n" + stage_prompt
     return stage_prompt + '\n' + item_pool_prompt + '\n' + value_vector + '\n' + last_situation_prompt + '\n' + query_prompt
 
 if __name__ == '__main__':

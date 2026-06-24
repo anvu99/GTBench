@@ -15,7 +15,8 @@ Each entry describes a behavioral pattern that {opponent_id} has repeatedly exhi
 --- HOW TO USE THIS DATABASE ---
 1. Identify which signals are firing: Match the current game state and context strictly against the 'When' field. A signal fires as soon as its 'When' condition is met — do NOT wait for the opponent to execute the predicted 'What' behavior before activating the policy. By then it may be too late.
 2. Treat 'When' as a probabilistic prior, not a fact: A signal's trigger condition adjusts your expectation of opponent behavior — it is not proof. If live evidence strongly contradicts the 'When' condition, you may down-weight the signal.
-   ⚠ CRITICAL EXCEPTION: Rule 2 applies ONLY to the 'When' trigger field. It does NOT apply to the Policy field. Once a signal's trigger is confirmed, the Policy is a mandatory executable action, not a suggestion. You may NOT override the Policy because you expect a better outcome from a different action.
+   ⚠ CRITICAL EXCEPTION: Rule 2 applies ONLY to the 'When' trigger field. It does NOT apply to the Policy field. Once a signal's trigger is confirmed, the Policy is a mandatory executable action, not a suggestion. You may NOT override the Policy simply because you expect a better outcome from a different action.
+   ⚠ POLICY HARM EXCEPTION: The one permitted override is when executing the Policy-prescribed action would be directly harmful to your position in the current game state — meaning the action itself actively worsens your standing (e.g., it allows the opponent an immediate decisive advantage, or it forces you into a self-defeating move). If the prescribed action is neutral or beneficial, you MUST follow the Policy. This exception is NOT a license to ignore the Policy on general strategic grounds — it applies only when the prescribed action is concretely harmful right now, not merely suboptimal by your in-game reasoning.
 3. Use 'What' for strategic understanding: Once a signal fires, read the 'What' field to understand what the opponent is trying to accomplish. Use this to anticipate their next move while executing your Policy.
 4. Execute the Policy: When a signal fires, follow its Policy field exactly. The policy encodes decisions refined across many past games and supersedes in-game reasoning about expected outcomes.
 === END OPPONENT REPUTATION DATABASE ===
@@ -41,6 +42,12 @@ Your goal is to compare the agent's in-game observations against the GROUND TRUT
 
 --- ✅ MATCH GROUND TRUTH (Full History) ---
 These are the confirmed, objective move-by-move outcomes. Use these as the authoritative ground truth.
+
+Reading the history:
+{game_history_legend}
+- [Chat]: Chat message sent that turn (if chat is enabled).
+- [Move]: The physical move executed after the position above.
+
 {game_history}
 
 --- AGENT'S IN-GAME OBSERVATIONS (Window Summaries) ---
@@ -58,9 +65,9 @@ The goal of this report is to improve the agent's knowledge of this opponent so 
 
 --- LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
-* When: The trigger condition — the full observable context and prior state that preceded or coincided with this behavior. Describe everything that could plausibly have driven the opponent's decision: the situational history, established patterns, and any relevant observable signals present at the time. Do not infer triggers that were not directly observed.
-* What: The factual observation of what the opponent did. Write only what was directly observed. Never use conditional language (e.g., "as long as", "whenever", "unless") — those imply rules that may not have been tested. If a condition was not tested, state that explicitly.
-* Policy: The executable action plan that aims to maximize the agent's win rate.
+* When: The trigger condition — the full observable context and prior state that preceded or coincided with this behavior. Describe everything that could plausibly have driven the opponent's decision: the situational history, established patterns, and any relevant observable signals present at the time. Do not infer triggers that were not directly observed. Maximum 4 sentences.
+* What: The factual observation of what the opponent did. Write only what was directly observed. Never use conditional language (e.g., "as long as", "whenever", "unless") — those imply rules that may not have been tested. If a condition was not tested, state that explicitly. Maximum 4 sentences.
+* Policy: The executable action plan that aims to maximize the agent's win rate. Maximum 4 sentences.
   - If all relevant opponent behavior has been observed: prescribe the optimal exploitation action directly.
   - If the What field notes untested conditions that, if known, would enable a better strategy: prescribe (1) how and when to probe for that missing information, and (2) what action to take contingent on the probe result.
   - The Policy MUST NOT assume untested opponent behavior when prescribing actions.
@@ -77,11 +84,12 @@ You may include as many update entries as necessary. A single gradient report ca
 
 ⚠ VERIFICATION RULE: Do not assert untested opponent behavior. You must only describe behaviors and responses that were explicitly triggered and observed in the current game. If a specific action was never taken by the agent, you cannot make claims about how the opponent would have reacted to it.
 
-⚠ PRESERVATION RULE: When proposing a [MODIFY] on ANY field, do NOT replace the Old value with a narrower description covering only what was triggered this game. The Current LTM was built by accumulating evidence across many past games, each testing different conditions. If an Old field describes behaviors or conditions confirmed in past games but not re-triggered this game, those observations remain valid. A [MODIFY] on any field is only warranted if this game: (a) adds new observations that should be incorporated into the existing description, or (b) directly contradicts a specific claim in the Old value.
+⚠ INFORMATION FIDELITY RULE: When modifying any field, your goal is to produce the most accurate, general description that still captures every confirmed observation from past games. Before writing a [MODIFY] on 'When' or 'What', apply this test: "Does the new text still fire (or describe) the same situations the old text covered, and is the Policy still correct in all those situations?" If yes, prefer the more concise or general form. If no, keep the more specific wording.
+  - Do NOT replace the 'When' trigger with a narrower one that drops previously confirmed trigger conditions — that is always a loss of information.
+  - DO replace an overfitted trigger with a broader abstraction if it cleanly subsumes all previously confirmed cases without losing any — that is an improvement, not a loss.
+  - For 'What', distill confirmed observations into the most concise, general behavioral description. You MAY drop specific observed instances if a generalized abstraction fully covers them. A 'What' that grows longer with each game is a failure mode; aim to converge toward a shorter, more accurate description over time.
 
-⚠ GENERALIZATION RULE: When writing or modifying a 'When' field, separate the fundamental behavioral trigger from the specific game context that happened to be present when you observed it. Generalize the trigger so it will fire in all similar future situations where the opponent is likely to behave the same way — not just in the exact circumstance of this game. Do not overfit to specific round numbers, exact board coordinates, or literal chat quotes unless they are strictly necessary for the tactic to apply.
-  - EXCEPTION: Only generalize if the Policy would still clearly benefit the agent in the broader situation. If the recommended Policy could cause harm or become irrelevant when the 'When' condition is widened (e.g., a counter-tactic that only works in one specific board configuration), keep the 'When' field narrow. Ask: "If this signal fired in a similar but not identical situation, would following the Policy still give the agent an advantage?" Only generalize if the answer is yes.
-  - NOTE: This rule is an explicit exception to the PRESERVATION RULE. Replacing an overfitting 'When' condition with a broader abstraction that still covers all previously confirmed cases is not considered a loss of confirmed information — it is a necessary correction. You are permitted to remove overly specific details from 'When' even if those details were directly observed in past games, provided the generalized trigger subsumes all those past observations.
+⚠ ANTI-DUPLICATION RULE: You are STRICTLY FORBIDDEN from using [ADD] if the core concept is already represented in the database. You MUST use [MODIFY] to elevate the existing signal to a higher level of abstraction that successfully covers the new edge case. [ADD] is reserved exclusively for fundamentally new behaviors that cannot be logically grouped with any existing signal.
 
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
@@ -96,9 +104,9 @@ Each entry in the gradient report MUST adhere to these structural rules:
   - Reason: <one sentence citing the specific ground truth observation that contradicts this signal>
 
 - [ADD] Signal: <new signal name>
-  - When: <specific trigger condition observation>
-  - What: <specific behavior observation>
-  - Policy: <concrete executable action>
+  - When: <specific trigger condition observation — max 4 sentences>
+  - What: <specific behavior observation — max 4 sentences>
+  - Policy: <concrete executable action — max 4 sentences>
 
 - [MODIFY] Signal: <exact name from database>
   - Field: <Name of Field to Change, e.g., When, What, or Policy>
@@ -108,26 +116,12 @@ Each entry in the gradient report MUST adhere to these structural rules:
 
 - [MERGE] Signals: <Signal A Name> + <Signal B Name>
   - Into Signal: <new unified signal name>
-  - When: <unified trigger condition>
-  - What: <unified behavior description>
-  - Policy: <concrete executable unified policy>
+  - When: <unified trigger condition — max 4 sentences>
+  - What: <unified behavior description — max 4 sentences>
+  - Policy: <concrete executable unified policy — max 4 sentences>
 
 ⚠ ANTI-VAGUENESS RULE: The policy MUST name a concrete, executable action. 
-
---- EXAMPLES OF VALID GRADIENT ENTRIES ---
-
-- [ADD] Signal: Early Chat Bluffing
-  - When: The opponent initiates chat in the first 3 moves.
-  - What: They claim to be a beginner or pretend to make a mistake.
-  - Policy: Ignore their chat claims completely and assume they are an experienced player attempting to bait an overextension.
-
-- [MODIFY] Signal: Central Pawn Push
-  - Field: Policy
-    - Old: Block the pawn immediately.
-    - New: Ignore the central pawn and advance your edge pawns to create a dual threat.
-
-- [REMOVE] Signal: Avoids A-Column
-  - Reason: The opponent advanced their A-column pawn in move 12, contradicting the prior belief that they ignore the left edge.
+⚠ BREVITY RULE: Each of When, What, and Policy MUST be at most 4 sentences.
 
 If no notable signals were observed, write: "No signals observed."
 Do NOT rewrite the current Long-Term Memory. Only produce the gradient report.
@@ -201,17 +195,18 @@ When the same signal receives conflicting instructions across the {n} gradient r
 
 --- SYNTHESIS QUALITY RULES ---
 - **Abstract and Generalize**: Do not include game-specific details (specific round numbers, one-off board states). Produce generalized behavioral descriptions that apply across games.
+- **Brevity**: Each of When, What, and Policy MUST be at most 4 sentences in the final database. 
 - **Merge-First Discipline**: Before finalizing the output, scan the *entire* resulting database for signals that describe variations of the same underlying behavior. Two signals should be merged into one if a single unified policy would serve the agent equally well in both triggering situations. Do not require identical trigger wording — triggers are equivalent if they describe the same underlying game situation from different angles. Emit a [MERGE] for any such pair you identify, even if the gradient reports did not propose one.
-- **Prefer [MODIFY] over [ADD]**: If a proposed new signal partially overlaps an existing one, expand the existing signal’s When/What/Policy to cover both cases instead of inserting a duplicate.
+- **ANTI-DUPLICATION RULE**: You are STRICTLY FORBIDDEN from finalizing an [ADD] if the core concept is already represented in the database. You MUST instead use [MODIFY] or [MERGE] to elevate the existing signal to a higher level of abstraction that covers the new edge case.
 - **Distinct signals only**: Only retain a signal as a separate entry if its trigger condition and required response are clearly distinct from every other signal in the database such that merging would weaken the policy.
 
 
 Each synthesized memory entry MUST use this format:
 
 - Signal: [Short Name of Pattern]
-  - When: [Specific trigger condition observation]
-  - What: [Specific behavior observation]
-  - Policy: [Concrete executable action]
+  - When: [Specific trigger condition observation — max 4 sentences]
+  - What: [Specific behavior observation — max 4 sentences]
+  - Policy: [Concrete executable action — max 4 sentences]
 
 Write ONLY the updated memory. Do not include any pleasantries or conversational filler.
 If no memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.
@@ -240,7 +235,8 @@ Each entry describes a behavioral pattern you have repeatedly exhibited across p
 --- HOW TO USE THIS DATABASE ---
 1. Identify which signals are firing: Match the current board state and game context strictly against the 'When' field. A signal fires as soon as its 'When' condition is met — do NOT wait to observe the 'What' behavior before activating the Policy.
 2. Treat 'When' as a probabilistic prior, not a fact: If live evidence strongly contradicts the 'When' condition, you may down-weight the signal.
-   ⚠ CRITICAL EXCEPTION: Rule 2 applies ONLY to the 'When' trigger field. It does NOT apply to the Policy field. Once a signal's trigger is confirmed, the Policy is a mandatory executable action, not a suggestion. You may NOT override it with in-game reasoning.
+   ⚠ CRITICAL EXCEPTION: Rule 2 applies ONLY to the 'When' trigger field. It does NOT apply to the Policy field. Once a signal's trigger is confirmed, the Policy is a mandatory executable action, not a suggestion. You may NOT override it simply because you expect a better outcome from a different action.
+   ⚠ POLICY HARM EXCEPTION: The one permitted override is when executing the Policy-prescribed action would be directly harmful to your position in the current game state — meaning the action itself actively worsens your standing (e.g., it allows the opponent an immediate decisive advantage, or it forces you into a self-defeating move). If the prescribed action is neutral or beneficial, you MUST follow the Policy. This exception is NOT a license to ignore the Policy on general strategic grounds — it applies only when the prescribed action is concretely harmful right now, not merely suboptimal by your in-game reasoning.
 3. Use 'What' for self-awareness: Once a signal fires, read the 'What' field to understand your own pattern — either to consciously avoid it (FLAW) or to intentionally reproduce it (STRENGTH).
 4. Execute the Policy exactly as written. For FLAW signals this corrects your tendency; for STRENGTH signals this reinforces your advantage.
 === END SELF-REPUTATION DATABASE ==="""
@@ -252,6 +248,12 @@ Your goal is to compare the agent's in-game decisions against the GROUND TRUTH g
 
 --- ✅ MATCH GROUND TRUTH (Full History) ---
 These are the confirmed, objective move-by-move outcomes. Use these as the authoritative ground truth.
+
+Reading the history:
+{game_history_legend}
+- [Chat]: Chat message sent that turn (if chat is enabled).
+- [Move]: The physical move executed after the position above.
+
 {game_history}
 
 --- AGENT'S IN-GAME OBSERVATIONS (Window Summaries) ---
@@ -273,9 +275,9 @@ A high-quality report captures BOTH types of signals:
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern in the agent's own play.
 * Type: FLAW or STRENGTH.
-* When: The trigger condition — the board state or game context that activates this signal. Describe only directly observable game state, not inferences about the opponent.
-* What: For FLAW: what the agent typically does incorrectly in this situation. For STRENGTH: what the agent does effectively. Write only what was directly observed.
-* Policy: For FLAW: the corrective action to execute instead. For STRENGTH: confirmation to reinforce the tactic.
+* When: The trigger condition — the board state or game context that activates this signal. Describe only directly observable game state, not inferences about the opponent. Maximum 4 sentences.
+* What: For FLAW: what the agent typically does incorrectly in this situation. For STRENGTH: what the agent does effectively. Write only what was directly observed. Maximum 4 sentences.
+* Policy: For FLAW: the corrective action to execute instead. For STRENGTH: confirmation to reinforce the tactic. Maximum 4 sentences.
   - The Policy MUST be a concrete, executable action.
   - The Policy MUST NOT describe opponent behavior — it must prescribe only what the agent itself should do.
 
@@ -291,16 +293,17 @@ You may include as many update entries as necessary.
 
 ⚠ VERIFICATION RULE: Do not assert unobserved agent behavior. Only describe patterns that were explicitly triggered and observed in the current game.
 
-⚠ PRESERVATION RULE: When proposing a [MODIFY] on ANY field, do NOT replace the Old value with a narrower description covering only what was triggered this game. The Current Self-Reputation Database was built by accumulating evidence across many past games. A [MODIFY] is only warranted if this game: (a) adds new observations that should be incorporated, or (b) directly contradicts a specific claim in the Old value.
+⚠ INFORMATION FIDELITY RULE: When modifying any field, your goal is to produce the most accurate, general description that still captures every confirmed observation from past games. Before writing a [MODIFY] on 'When' or 'What', apply this test: "Does the new text still fire (or describe) the same situations the old text covered, and is the Policy still correct in all those situations?" If yes, prefer the more concise or general form. If no, keep the more specific wording.
+  - Do NOT replace the 'When' trigger with a narrower one that drops previously confirmed trigger conditions — that is always a loss of information.
+  - DO replace an overfitted trigger with a broader abstraction if it cleanly subsumes all previously confirmed cases without losing any — that is an improvement, not a loss.
+  - For 'What', distill confirmed observations into the most concise, general description. You MAY drop specific observed instances if a generalized abstraction fully covers them. A 'What' that grows longer with each game is a failure mode; aim to converge toward a shorter, more accurate description over time.
 
-⚠ GENERALIZATION RULE: When writing or modifying a 'When' field, separate the fundamental trigger from the specific game context. Generalize so it will fire in all similar future situations where the agent is likely to exhibit the same pattern. Do not overfit to specific round numbers, board coordinates, or one-off game states unless strictly necessary.
-  - EXCEPTION: Only generalize if the Policy would still clearly benefit the agent in the broader situation. Ask: "If this signal fired in a similar but not identical situation, would following the Policy still give the agent an advantage?" Only generalize if the answer is yes.
-  - NOTE: This rule is an explicit exception to the PRESERVATION RULE. Replacing an overfitting 'When' with a broader abstraction that subsumes all past observations is permitted.
+⚠ ANTI-DUPLICATION RULE: You are STRICTLY FORBIDDEN from using [ADD] if the core concept is already represented in the database. You MUST use [MODIFY] to elevate the existing signal to a higher level of abstraction that successfully covers the new edge case. [ADD] is reserved exclusively for fundamentally new behaviors that cannot be logically grouped with any existing signal.
 
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
 ⚠ PRE-ANALYSIS (complete both steps in your internal reasoning before writing any entries):
-1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the corrective Policy (FLAW) or reinforced the tactic (STRENGTH), (c) what the board outcome was. If a FLAW signal fired and the agent repeated the bad habit, prioritize a [MODIFY] on that signal's Policy to make the correction more explicit or forceful. If a STRENGTH signal fired and the agent failed to use the tactic, propose a [MODIFY] to make the reinforcement more explicit.
+1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the corrective Policy (FLAW) or reinforced the tactic (STRENGTH), (c) what the board outcome was. If a FLAW signal fired and the agent repeated the bad habit, prioritize a [MODIFY] on that signal's Policy to make the correction more explicit or forceful. If a FLAW signal fired and the agent successfully followed its corrective Policy, you are STRICTLY FORBIDDEN from proposing a new STRENGTH [ADD] for this success. Instead, rely on the existing FLAW to guide future play. If a STRENGTH signal fired and the agent failed to use the tactic, propose a [MODIFY] to make the reinforcement more explicit.
 2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Evaluate whether the agent's chat strategy was effective or counterproductive. Note any self-patterns in how the agent used chat.
 
 
@@ -311,9 +314,9 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
 
 - [ADD] Signal: <new signal name>
   - Type: <FLAW | STRENGTH>
-  - When: <specific trigger condition>
-  - What: <specific behavior observation>
-  - Policy: <concrete executable action>
+  - When: <specific trigger condition — max 4 sentences>
+  - What: <specific behavior observation — max 4 sentences>
+  - Policy: <concrete executable action — max 4 sentences>
 
 - [MODIFY] Signal: <exact name from database>
   - Field: <Name of Field to Change, e.g., When, What, Type, or Policy>
@@ -324,40 +327,12 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
 - [MERGE] Signals: <Signal A Name> + <Signal B Name>
   - Into Signal: <new unified signal name>
   - Type: <FLAW | STRENGTH>
-  - When: <unified trigger condition>
-  - What: <unified behavior description>
-  - Policy: <concrete executable unified policy>
+  - When: <unified trigger condition — max 4 sentences>
+  - What: <unified behavior description — max 4 sentences>
+  - Policy: <concrete executable unified policy — max 4 sentences>
 
 ⚠ ANTI-VAGUENESS RULE: The Policy MUST name a concrete, executable action. Reject any policy that could apply generically to any game situation.
-
---- EXAMPLES OF VALID SELF-GRADIENT ENTRIES ---
-
-- [ADD] Signal: Unsupported Second-Row Advance
-  - Type: FLAW
-  - When: Agent has a piece that could advance to the opponent's second row (one step from their home row), but at least one opponent backline piece has diagonal capture access to that destination square.
-  - What: Agent advances to the second row anyway, losing the piece to a diagonal capture without reaching the home row.
-  - Policy: Before advancing to the second row, check every opponent backline piece for diagonal capture access to the destination square. Only advance if the square is safe AND the piece can reach the home row on the very next move.
-
-- [ADD] Signal: Successful Lane Separation
-  - Type: STRENGTH
-  - When: Agent negotiates or naturally achieves a situation where one file or flank is uncontested by opponent pieces.
-  - What: Agent races its piece down the uncontested lane, reaching the home row without resistance.
-  - Policy: Identify uncontested lanes early and commit one piece exclusively to racing it. Do not divert that piece to block opponent threats — keep it racing.
-
-- [MODIFY] Signal: Unsupported Second-Row Advance
-  - Field: When
-    - Old: Agent has a piece that could advance to the opponent's second row and at least one opponent backline piece has diagonal capture access.
-    - New: Agent has a piece that could advance to the opponent's second row (one step from their home row), and ANY opponent piece — not just backline pieces — has diagonal capture access to that destination square on their next move.
-
-- [REMOVE] Signal: Avoids Center Files
-  - Reason: In move 8 the agent advanced its center-file piece directly forward, contradicting the pattern that it avoids center files.
-
-- [MERGE] Signals: Edge Overextension + Diagonal Capture Blindspot
-  - Into Signal: Peripheral Advance Vulnerability
-  - Type: FLAW
-  - When: Agent advances a piece on the edge file or to a square near the board edge where only one retreat path exists and an opponent piece has diagonal access.
-  - What: Agent loses the piece to a diagonal capture from an angle it did not check, often on an edge file where the piece has no lateral escape.
-  - Policy: Before advancing any piece to an edge-adjacent square or to any square with limited retreat options, explicitly verify no opponent piece can capture diagonally on the next move.
+⚠ BREVITY RULE: Each of When, What, and Policy MUST be at most 4 sentences.
 
 If no notable self-patterns were observed, write: "No signals observed."
 Do NOT rewrite the current Self-Reputation Database. Only produce the self-gradient report.
@@ -408,8 +383,10 @@ When the same signal receives conflicting instructions across the {n} gradient r
 
 --- SYNTHESIS QUALITY RULES ---
 - **Abstract and Generalize**: Do not include game-specific details. Produce generalized descriptions that apply across games.
+- **Brevity**: Each of When, What, and Policy MUST be at most 4 sentences in the final database. If applying a [MODIFY] or [MERGE] would push a field beyond 4 sentences, distill it — generalize rather than enumerate.
 - **Merge-First Discipline**: Before finalizing the output, scan the *entire* resulting database for signals that describe variations of the same underlying self-pattern. Two signals should be merged into one if a single unified policy would serve the agent equally well in both triggering situations. Do not require identical trigger wording — triggers are equivalent if they describe the same underlying game situation from different angles. Emit a [MERGE] for any such pair you identify, even if the gradient reports did not propose one.
-- **Prefer [MODIFY] over [ADD]**: If a proposed new signal partially overlaps an existing one, expand the existing signal’s When/What/Policy to cover both cases instead of inserting a duplicate.
+- **FLAW/STRENGTH MERGE RULE**: If a FLAW signal and a STRENGTH signal describe the same underlying game situation (e.g., the STRENGTH is simply the successful execution of the FLAW's corrective policy), you MUST [MERGE] them. The resulting merged signal MUST be typed as a FLAW. Frame the new 'What' field to describe the known pitfall or bad habit to avoid, and frame the new 'Policy' field as the proven, successful action to take instead.
+- **ANTI-DUPLICATION RULE**: You are STRICTLY FORBIDDEN from finalizing an [ADD] if the core concept is already represented in the database. You MUST instead use [MODIFY] or [MERGE] to elevate the existing signal to a higher level of abstraction that covers the new edge case.
 - **Distinct signals only**: Only retain a signal as a separate entry if its trigger condition and required response are clearly distinct from every other signal in the database such that merging would weaken the policy.
 
 
@@ -417,9 +394,9 @@ Each synthesized memory entry MUST use this format:
 
 - Signal: [Short Name of Pattern]
   - Type: [FLAW | STRENGTH]
-  - When: [Specific trigger condition]
-  - What: [Specific behavior observation]
-  - Policy: [Concrete executable action]
+  - When: [Specific trigger condition — max 4 sentences]
+  - What: [Specific behavior observation — max 4 sentences]
+  - Policy: [Concrete executable action — max 4 sentences]
 
 Write ONLY the updated self-memory. Do not include any pleasantries or conversational filler.
 If no self-memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.

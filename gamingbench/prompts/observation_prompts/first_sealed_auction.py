@@ -18,4 +18,6 @@ def construct_observation_prompt(observations):
              f'Your opponent also has an expected valuation and you don not know it.' \
              f'\n\n' \
              f'The legal actions are: {legal_move_str}. '
+    player_idx = observations.get("player_idx", 0)
+    prompt = f"You are playing as Player {player_idx + 1}.\n" + prompt
     return prompt

@@ -14,6 +14,15 @@ def construct_observation_prompt(observations):
     opponent_moves = observations.get('opponent_moves', [])
     self_moves = observations.get('self_moves', [])
 
+    player_idx = observations.get('player_idx', 0)
+    symbol = "X (Crosses)" if player_idx == 0 else "O (Noughts)"
+    
+    board_str = observations.get('board', '')
+    if board_str:
+        board_preview = f"The board currently looks like this:\n{board_str}\n"
+    else:
+        board_preview = ""
+
     if len(opponent_moves) != 0 or len(self_moves) != 0:
         if len(opponent_moves) == 0:
             opponent_prompt = ''
@@ -25,9 +34,9 @@ def construct_observation_prompt(observations):
         else:
             finished_moves = ', '.join(self_moves)
             agent_prompt = f'You have finished actions: {finished_moves}.'
-        finished_move_prompt = f'{opponent_prompt} {agent_prompt}'
+        finished_move_prompt = f'You are playing as {symbol}.\n{board_preview}\n{opponent_prompt} {agent_prompt}'
     else:
-        finished_move_prompt = f'You are the first to go.'
+        finished_move_prompt = f'You are playing as {symbol}.\n{board_preview}\nYou are the first to go.'
 
     if len(legal_moves) == 0:
         legal_position_prompt = 'Currently, it is not your turn to act.'
@@ -38,3 +47,8 @@ def construct_observation_prompt(observations):
     prompt = f'{finished_move_prompt}\n{legal_position_prompt}'
 
     return prompt
+
+def _construct_game_history_legend():
+    return """- [Player Context]: States which symbol ("x" or "o") "You" and "Opponent" correspond to.
+- [Position Legend]: Explains how to read the [Position] lines.
+- [Position]: The board layout at the moment that player had to make their decision (before the move was executed). The board is a 3x3 grid. 'x'=Cross, 'o'=Nought, '.'=empty."""

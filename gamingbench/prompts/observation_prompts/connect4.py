@@ -28,6 +28,20 @@ def construct_observation_prompt(observations):
         legal_pos = ','.join(legal_actions)
         legal_position_prompt = f'Currently, the legal positions are {legal_pos}.'
 
-    prompt = f'{opponent_prompt} {agent_prompt} {legal_position_prompt}'
+    player_idx = observations.get('player_idx', 0)
+    symbol = "X (Red)" if player_idx == 0 else "O (Yellow)"
+    
+    board_str = observations.get('board', '')
+    if board_str:
+        board_preview = f"The board currently looks like this:\n{board_str}\n"
+    else:
+        board_preview = ""
+        
+    prompt = f'You are playing as {symbol}.\n{board_preview}\n{opponent_prompt} {agent_prompt} {legal_position_prompt}'
 
     return prompt
+
+def _construct_game_history_legend():
+    return """- [Player Context]: States which piece ("x" or "o") "You" and "Opponent" correspond to.
+- [Position Legend]: Explains how to read the [Position] lines.
+- [Position]: The board layout at the moment that player had to make their decision (before the move was executed). The board is a 6x7 grid. 'x' and 'o' represent the players' pieces, '.'=empty."""

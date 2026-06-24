@@ -41,7 +41,8 @@ def run_gradient_engine(
     game_intro: str,
     game_history: str,
     window_summaries: str,
-    current_ltm: str
+    current_ltm: str,
+    game_history_legend: str
 ) -> tuple:
     """Runs the TextGrad strategy gradient engine to analyze match performance.
     
@@ -54,7 +55,8 @@ def run_gradient_engine(
     prompt = game_intro + "\n\n" + GRADIENT_ENGINE_PROMPT.format(
         game_history=game_history,
         window_summaries=window_summaries,
-        current_ltm=current_ltm
+        current_ltm=current_ltm,
+        game_history_legend=game_history_legend
     )
 
     messages = [

@@ -97,6 +97,8 @@ class OpenSpielGame:
                     valid_action = self.openspiel_action_to_agent(valid_action)
                     observation_dict['legal_moves'] = valid_action
                     observation_dict['env_name'] = self.game_name
+                    observation_dict['player_idx'] = player_idx
+                    observation_dict['board'] = str(self.env)
                     observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
                     
                     self.logger.info(
@@ -202,6 +204,8 @@ class OpenSpielGame:
 
                 observation_dict['legal_moves'] = valid_action
                 observation_dict['env_name'] = self.game_name
+                observation_dict['player_idx'] = player_idx
+                observation_dict['board'] = observations
                 observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
                 
                 if len(legal_actions) != 1:
@@ -283,6 +287,44 @@ class OpenSpielGame:
             if hasattr(agent, 'post_game_update'):
                 agent_history = ""
                 
+                if self.game_name == 'breakthrough':
+                    you_color = ("Black ('b'), advancing downward from Row 8 toward Row 1"
+                                 if agent_idx == 0 else
+                                 "White ('w'), advancing upward from Row 1 toward Row 8")
+                    opp_color = "White ('w')" if agent_idx == 0 else "Black ('b')"
+                    agent_history += (
+                        f"[Player Context] You play as {you_color}. "
+                        f"The opponent plays as {opp_color}.\n"
+                        f"[Position Legend] Each [Position] line shows the board before that player's move. "
+                        f"Format: a list of row strings from Row 8 (top) to Row 1 (bottom), "
+                        f"columns a-c left to right. "
+                        f"'b'=Black piece, 'w'=White piece, '.'=empty square.\n\n"
+                    )
+                elif self.game_name == 'tictactoe':
+                    you_symbol = "X (Crosses)" if agent_idx == 0 else "O (Noughts)"
+                    opp_symbol = "O (Noughts)" if agent_idx == 0 else "X (Crosses)"
+                    agent_history += (
+                        f"[Player Context] You play as {you_symbol}. "
+                        f"The opponent plays as {opp_symbol}.\n"
+                        f"[Position Legend] Each [Position] line shows the board before that player's move.\n\n"
+                    )
+                elif self.game_name == 'connect4':
+                    you_symbol = "X (Red)" if agent_idx == 0 else "O (Yellow)"
+                    opp_symbol = "O (Yellow)" if agent_idx == 0 else "X (Red)"
+                    agent_history += (
+                        f"[Player Context] You play as {you_symbol}. "
+                        f"The opponent plays as {opp_symbol}.\n"
+                        f"[Position Legend] Each [Position] line shows the board before that player's move.\n\n"
+                    )
+                else:
+                    you_num = 1 if agent_idx == 0 else 2
+                    opp_num = 2 if agent_idx == 0 else 1
+                    agent_history += (
+                        f"[Player Context] You play as Player {you_num}. "
+                        f"The opponent plays as Player {opp_num}.\n"
+                        f"[Position Legend] Each [Position] line shows the game state before that player's move.\n\n"
+                    )
+
                 chat_enabled = all(getattr(a, "enable_chat", False) for a in agent_list)
                 chat_by_round = {}
                 if chat_enabled:
@@ -304,6 +346,11 @@ class OpenSpielGame:
                             
                     if t < len(q_mem.get(0, [])):
                         prefix = "You" if agent_idx == 0 else "Opponent"
+                        step_idx = 2 * t
+                        if step_idx < len(_match.steps):
+                            board = _match.steps[step_idx].observation.get('board', '')
+                            if board:
+                                agent_history += f"  [Position]: {board}\n"
                         agent_history += f"  [Move] {prefix}: {q_mem[0][t]}\n\n"
                     else:
                         agent_history += "\n"
@@ -315,6 +362,11 @@ class OpenSpielGame:
                             
                     if t < len(q_mem.get(1, [])):
                         prefix = "You" if agent_idx == 1 else "Opponent"
+                        step_idx = 2 * t + 1
+                        if step_idx < len(_match.steps):
+                            board = _match.steps[step_idx].observation.get('board', '')
+                            if board:
+                                agent_history += f"  [Position]: {board}\n"
                         agent_history += f"  [Move] {prefix}: {q_mem[1][t]}\n\n"
                     else:
                         agent_history += "\n"

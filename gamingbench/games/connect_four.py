@@ -19,8 +19,10 @@ class ConnectFour(OpenSpielGame):
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
         opponent_idx = 1 if current_player_idx == 0 else 0
         res = {
+            'board': openspiel_obs,
             'opponent_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(opponent_idx, [])),
             'self_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(current_player_idx, [])),
+            'player_idx': current_player_idx,
         }
         return res
         pass

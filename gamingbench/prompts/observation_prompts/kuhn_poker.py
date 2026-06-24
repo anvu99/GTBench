@@ -50,6 +50,8 @@ def construct_observation_prompt(observations):
              f'{move_prompt}\n' \
              f'Your legal moves are: <Pass>, <Bet>.'
 
+    player_idx = observations.get("player_idx", 0)
+    prompt = f"You are playing as Player {player_idx + 1}.\n" + prompt
     return prompt
 
 

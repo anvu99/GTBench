@@ -21,7 +21,14 @@ def construct_observation_prompt(observations):
              f'the 3rd pile has {piles[2]} match(es);\nthe 4th pile has {piles[3]} match(es). \n\n' \
              f'The legal actions are: {legal_move_str}.'
 
+    player_idx = observations.get("player_idx", 0)
+    prompt = f"You are playing as Player {player_idx + 1}.\n" + prompt
     return prompt
+
+def _construct_game_history_legend():
+    return """- [Player Context]: States which player is "You" and "Opponent".
+- [Position Legend]: Explains how to read the [Position] lines.
+- [Position]: The state of the game at the moment that player had to make their decision (before the move was executed). It shows the number of matches remaining in each of the 4 piles."""
 
 
 if __name__ == '__main__':
