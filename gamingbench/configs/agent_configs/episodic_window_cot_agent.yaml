@@ -1,0 +1,7 @@
+agent_name: EpisodicWindowCotAgent
+num_generations: 1
+majority_vote: False
+enable_chat: true
+think_further: false
+window_size: 10
+ew_store_path: ew_store.json

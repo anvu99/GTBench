@@ -7,6 +7,11 @@ from gamingbench.agents.mcts_agent import MCTSAgent
 from gamingbench.agents.titfortat_agent import TitForTatAgent
 from gamingbench.agents.ltm_agent import LTMAgent
 from gamingbench.agents.sliding_window_agent import SlidingWindowAgent
+from gamingbench.agents.sliding_window_cot_agent import SlidingWindowCotAgent
+from gamingbench.agents.episodic_window_agent import EpisodicWindowAgent
+from gamingbench.agents.episodic_window_cot_agent import EpisodicWindowCotAgent
+
+from gamingbench.agents.ltm_cot_agent import LTMCotAgent
 
 __all__ = [
     "PromptAgent",
@@ -17,5 +22,9 @@ __all__ = [
     "MCTSAgent",
     "TitForTatAgent",
     "LTMAgent",
-    "SlidingWindowAgent"
+    "SlidingWindowAgent",
+    "SlidingWindowCotAgent",
+    "LTMCotAgent",
+    "EpisodicWindowAgent",
+    "EpisodicWindowCotAgent"
 ]

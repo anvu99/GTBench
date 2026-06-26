@@ -98,7 +98,6 @@ class OpenSpielGame:
                     observation_dict['legal_moves'] = valid_action
                     observation_dict['env_name'] = self.game_name
                     observation_dict['player_idx'] = player_idx
-                    observation_dict['board'] = str(self.env)
                     observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
                     
                     self.logger.info(
@@ -205,7 +204,6 @@ class OpenSpielGame:
                 observation_dict['legal_moves'] = valid_action
                 observation_dict['env_name'] = self.game_name
                 observation_dict['player_idx'] = player_idx
-                observation_dict['board'] = observations
                 observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
                 
                 if len(legal_actions) != 1:

@@ -7,7 +7,7 @@ Use this channel highly strategically to increase your chances of winning. Depen
 - Build false trust to set up a future betrayal.
 
 Write a single, concise chat message to the opponent utilizing these psychological and strategic tactics. 
-Do NOT output a game move, and do NOT output internal reasoning. Just output the message text you wish to send.
+Do NOT output a game move, and do NOT output internal reasoning. Just output the message text you wish to send enclosed in <chat> and </chat> tags.
 """
 
 CHAT_HISTORY_INJECTION = """\

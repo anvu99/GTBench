@@ -50,9 +50,10 @@ class PromptAgent(BaseAgent):
         msgs = self.construct_init_messages(system_prompt, observation_prompt)
         
         try:
-            from gamingbench.utils.utils import strip_thinking_block
+            from gamingbench.utils.utils import strip_thinking_block, strip_chat_tags
             responses, query = self.llm_query(msgs, n=1, stop=None, prompt_type='move')
-            message = strip_thinking_block(responses[0])
+            message = strip_thinking_block(responses[0]).strip()
+            message = strip_chat_tags(message)
             self.logger.info(f"Chat Generated: {message}")
             return message, query
         except Exception as e:

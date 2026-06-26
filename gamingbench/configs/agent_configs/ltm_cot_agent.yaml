@@ -1,0 +1,7 @@
+agent_name: LTMCotAgent
+agent_type: LTMCotAgent
+num_generations: 1
+majority_vote: False
+enable_chat: True
+summarize_every: 5
+ltm_store_path: "ltm_store.json"

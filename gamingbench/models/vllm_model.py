@@ -122,6 +122,9 @@ class VLLMModel(BaseModel):
             "disable_custom_all_reduce": True,
             "enable_prefix_caching": True,
             "trust_remote_code": True,
+            "kv_cache_dtype": "fp8",  # halves KV-cache VRAM; no quality change
+            "enable_chunked_prefill": True,
+            "max_num_batched_tokens": 4096,
         }
         
         # Initialize engine lazily or fetch singleton
@@ -222,27 +225,40 @@ class VLLMModel(BaseModel):
             formatted_msgs, tokenize=False, add_generation_prompt=True
         )
 
-    async def _async_query(self, prompt: str, stop: List[str]):
+    async def _async_query(self, prompt: str, stop: List[str], enable_thinking: bool = None):
         """Async inner function that actually talks to vLLM Engine."""
-        # Use task id for tracking request
-        request_id = str(id(asyncio.current_task())) + "_" + str(id(prompt))
+        import uuid
+        request_id = str(uuid.uuid4())
         
         from vllm import SamplingParams
         
         # Handle custom stops
         params = self.sampling_params
-        if stop:
+        thinking_budget = getattr(params, 'thinking_token_budget', None)
+
+        if stop or enable_thinking is False:
             stop_seqs = [stop] if isinstance(stop, str) else stop
-            # clone params to add stop
+            
+            # If dynamically disabled, fall back to optimal no-thinking params
+            if enable_thinking is False and self.is_qwen3:
+                temp = 0.7
+                tp_p = 0.8
+                budget = thinking_budget # MUST NOT be None, otherwise vLLM qwen3 parser hangs!
+            else:
+                temp = params.temperature
+                tp_p = params.top_p
+                budget = thinking_budget
+                
+            # clone params to add stop and overrides
             params = SamplingParams(
-                temperature=params.temperature,
-                top_p=params.top_p,
+                temperature=temp,
+                top_p=tp_p,
                 top_k=params.top_k,
                 min_p=params.min_p,
                 presence_penalty=params.presence_penalty,
                 repetition_penalty=params.repetition_penalty,
                 max_tokens=params.max_tokens,
-                thinking_token_budget=getattr(params, 'thinking_token_budget', None),
+                thinking_token_budget=budget,
                 stop=stop_seqs
             )
 
@@ -261,37 +277,56 @@ class VLLMModel(BaseModel):
             
         return "", 0, 0
 
-    def query(self, messages, n, stop, prompt_type):
+    async def _async_query_batch(self, prompt: str, stop: List[str], n: int, enable_thinking: bool = None):
+        """Fire n independent queries concurrently and return all results.
+
+        Using asyncio.gather ensures all n requests are visible to the vLLM
+        scheduler at the same time, so they are processed together in a single
+        continuous-batching window rather than one-at-a-time.
+        """
+        tasks = [self._async_query(prompt, stop, enable_thinking) for _ in range(n)]
+        return await asyncio.gather(*tasks)
+
+    def query(self, messages, n, stop, prompt_type, **kwargs):
         """
         Synchronous interface required by GTBench BaseModel.
+
+        All n samples are fired concurrently via asyncio.gather so that the
+        vLLM scheduler sees every request at once and can batch them together
+        in a single continuous-batching window.  Empty-output retries fall back
+        to individual sequential requests as before.
         """
         assert prompt_type in ['move', 'plan', 'vote']
         
-        prompt = self._format_messages(messages)
-        
+        enable_thinking = kwargs.get('enable_thinking', None)
+        prompt = self._format_messages(messages, enable_thinking=enable_thinking)
         loop = VLLMEngine._loop
         
-        response_texts = []
         total_completion_tokens = 0
         total_prompt_tokens = 0
-        
-        # Run n queries sequentially scheduled on the background thread's loop
-        for _ in range(n):
-            future = asyncio.run_coroutine_threadsafe(self._async_query(prompt, stop), loop)
-            text, comp_toks, prmpt_toks = future.result() # Blocks caller thread until done
-            
-            retries = 0
-            # Blind retry (Option B): if the stripped output is completely empty
-            while not self._strip_thinking(text).strip() and retries < 2:
-                retries += 1
-                future = asyncio.run_coroutine_threadsafe(self._async_query(prompt, stop), loop)
-                new_text, new_comp_toks, new_prmpt_toks = future.result()
-                text = new_text
-                comp_toks += new_comp_toks
-                prmpt_toks += new_prmpt_toks
-                
-            response_texts.append(text)
+        response_texts = []
+
+        # Fire all n requests simultaneously
+        future = asyncio.run_coroutine_threadsafe(
+            self._async_query_batch(prompt, stop, n, enable_thinking=enable_thinking), loop
+        )
+        batch_results = future.result()  # blocks until all n are done
+
+        for text, comp_toks, prmpt_toks in batch_results:
             total_completion_tokens += comp_toks
             total_prompt_tokens += prmpt_toks
-            
+
+            # Blind retry if the stripped output is completely empty
+            retries = 0
+            while not self._strip_thinking(text).strip() and retries < 2:
+                retries += 1
+                retry_future = asyncio.run_coroutine_threadsafe(
+                    self._async_query(prompt, stop, enable_thinking=enable_thinking), loop
+                )
+                text, new_comp, new_prmpt = retry_future.result()
+                total_completion_tokens += new_comp
+                total_prompt_tokens += new_prmpt
+
+            response_texts.append(text)
+
         return response_texts, total_completion_tokens, total_prompt_tokens

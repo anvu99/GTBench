@@ -120,6 +120,22 @@ def strip_thinking_block(text: str) -> str:
         # Handle truncated/unclosed <think> blocks
         text = text.split('<think>', 1)[0]
         
+    if '</thought>' in text:
+        text = text.rsplit('</thought>', 1)[-1]
+    elif '<thought>' in text:
+        text = text.split('<thought>', 1)[0]
+        
+    return text.strip()
+
+
+def strip_chat_tags(text: str) -> str:
+    import re
+    # Remove only specific formatting tags, leaving bracketed game actions intact
+    text = re.sub(r'</?(?:chat|msg|message|thought|output)>', '', text, flags=re.IGNORECASE)
+    # Remove prefixes like "You:", "Opponent:", "Player 1:", "Player 2:", "Me:"
+    text = re.sub(r'^(You|Opponent|Player \d+|Me):\s*', '', text, flags=re.IGNORECASE|re.MULTILINE)
+    # Also strip wrapping quotes if they exist (e.g., You: "hello" -> hello)
+    text = re.sub(r'^["\']|["\']$', '', text.strip())
     return text.strip()
 
 

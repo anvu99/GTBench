@@ -56,6 +56,11 @@ def _get_memory_snapshot(agent):
     """Returns a serializable snapshot of the agent's memory."""
     if hasattr(agent, 'sw_store'):
         return {'sw': dict(agent.sw_store.store)}
+    elif hasattr(agent, 'ew_store'):
+        return {
+            'ew_observations': {k: list(v) for k, v in agent.ew_store.observations.items()},
+            'ew_notes': dict(agent.ew_store.notes)
+        }
     elif hasattr(agent, 'ltm_store'):
         snap = {
             'ltm': dict(agent.ltm_store.store),
@@ -72,6 +77,13 @@ def _restore_memory_snapshot(clone, snapshot):
         if 'sw' in snapshot:
             clone.sw_store.store = dict(snapshot['sw'])
         clone.sw_store_path = '/dev/null'
+    if hasattr(clone, 'ew_store'):
+        from collections import deque
+        if 'ew_observations' in snapshot:
+            clone.ew_store.observations = {k: deque(v) for k, v in snapshot['ew_observations'].items()}
+        if 'ew_notes' in snapshot:
+            clone.ew_store.notes = dict(snapshot['ew_notes'])
+        clone.ew_store_path = '/dev/null'
     if hasattr(clone, 'ltm_store'):
         if 'ltm' in snapshot:
             clone.ltm_store.store = dict(snapshot['ltm'])
@@ -91,7 +103,7 @@ def clone_agent_for_batch(original_agent, memory_snapshot: dict):
     - Does NOT call set_storage_dir() — it never writes to disk (store_path='/dev/null').
     """
     clone = copy.deepcopy(original_agent)
-    clone._parent_store_path = getattr(original_agent, 'sw_store_path', getattr(original_agent, 'ltm_store_path', None))
+    clone._parent_store_path = getattr(original_agent, 'ew_store_path', getattr(original_agent, 'sw_store_path', getattr(original_agent, 'ltm_store_path', None)))
     _restore_memory_snapshot(clone, memory_snapshot)
     clone.batch_mode = True
     clone._last_batch_result = None
@@ -171,7 +183,7 @@ def run_game(game_name):
         batch_agents = []
         for a in agents:
             if hasattr(a, 'flush_batch_updates'):
-                store_path = getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None))
+                store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None)))
                 if store_path and store_path not in seen_store_paths:
                     seen_store_paths.add(store_path)
                     batch_agents.append(a)
@@ -182,7 +194,7 @@ def run_game(game_name):
 
             # Freeze the current memory store state for all games in this batch
             memory_snapshots = {
-                getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None)): _get_memory_snapshot(a) 
+                getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None))): _get_memory_snapshot(a) 
                 for a in batch_agents
             }
 
@@ -192,7 +204,7 @@ def run_game(game_name):
                 fresh_agents = []
                 for a in agents:
                     if hasattr(a, 'flush_batch_updates'):
-                        store_path = getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None))
+                        store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None)))
                         snap = memory_snapshots.get(store_path, _get_memory_snapshot(a))
                         fresh_agents.append(clone_agent_for_batch(a, snap))
                     else:
@@ -201,7 +213,7 @@ def run_game(game_name):
                 fresh_reversed = []
                 for a in reversed_agents:
                     if hasattr(a, 'flush_batch_updates'):
-                        store_path = getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None))
+                        store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', None)))
                         snap = memory_snapshots.get(store_path, _get_memory_snapshot(a))
                         fresh_reversed.append(clone_agent_for_batch(a, snap))
                     else:
@@ -258,8 +270,12 @@ def run_game(game_name):
                             batch_agent.current_game_intro  = sample.current_game_intro
                             batch_agent.current_game_name = game_name
                         break
+                from gamingbench.prompts.observation_prompts import construct_game_intro
                 for batch_agent in batch_agents:
-                    store_path = getattr(batch_agent, 'sw_store_path', getattr(batch_agent, 'ltm_store_path', None))
+                    batch_agent.current_game_name = game_name
+                    if not getattr(batch_agent, 'current_game_intro', None):
+                        batch_agent.current_game_intro = construct_game_intro(game_name)
+                    store_path = getattr(batch_agent, 'ew_store_path', getattr(batch_agent, 'sw_store_path', getattr(batch_agent, 'ltm_store_path', None)))
                     agent_data = [d for p_path, d in gradient_data if p_path == store_path]
                     if agent_data:
                         batch_agent.flush_batch_updates(agent_data)

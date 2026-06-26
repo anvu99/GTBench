@@ -1,0 +1,6 @@
+agent_name: SlidingWindowCotAgent
+num_generations: 1
+majority_vote: False
+enable_chat: true
+think_further: false
+sw_store_path: sw_store.json

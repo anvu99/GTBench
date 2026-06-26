@@ -23,9 +23,9 @@ Each entry describes a behavioral pattern that {opponent_id} has repeatedly exhi
 """
 
 WINDOW_SUMMARIZE_PROMPT = """\
-The last {K} moves just completed. Based on everything you have observed and decided this window, output exactly two lines:
+⚠ IMPORTANT: DO NOT select or output a move in your response. Your ONLY task right now is to generate a summary.
 
-⚠ IMPORTANT: DO NOT select or output a move in your response. Your ONLY task right now is to generate this summary.
+The last {K} moves just completed. Based on everything you have observed and decided this window, output EXACTLY the following two sections:
 
 Game/Opponent summary: [A few sentences — key observations about the opponent's moves and behavior that you need for post-game evaluation. If chat is active, compare what the opponent communicated against their actual moves to surface any relevant patterns.]
 
@@ -72,15 +72,17 @@ The goal of this report is to improve the agent's knowledge of this opponent so 
   - If the What field notes untested conditions that, if known, would enable a better strategy: prescribe (1) how and when to probe for that missing information, and (2) what action to take contingent on the probe result.
   - The Policy MUST NOT assume untested opponent behavior when prescribing actions.
 
-Analyze the game and propose updates using the following 4 tags:
+Analyze the game and propose updates using the following 5 tags:
 - [REMOVE]: Identify a signal whose core observed behavior (When/What) is directly contradicted by the ground truth, or whose entire signal — even after potential modification — is net harmful to retain. Do NOT use [REMOVE] if only the Policy is wrong; use [MODIFY] to fix the Policy instead. Do NOT use [REMOVE] simply because a signal's trigger was not encountered this game — absence of evidence is not contradiction.
 - [ADD]: Define a completely new observed behavior not yet covered by any signal in the current database. If an existing signal partially covers the behavior but one or more fields are incorrect, use [MODIFY] instead of adding a duplicate.
 - [MODIFY]: Identify an existing signal worth keeping, but whose one or more fields are inaccurate, misleading, too general, or too specific based on the current game evidence. Prefer [MODIFY] over [ADD] when the behavior is already partially captured by an existing signal. Only list the fields that are changing; omit all unchanged fields.
 - [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior. Use [MERGE] liberally: two signals should be merged if a single, unified policy would serve the agent equally well in both triggering situations. Prefer [MERGE] over a combination of [MODIFY]+[ADD] whenever the new game evidence is already partially captured by two separate existing signals that happen to co-occur or have similar triggers. Do NOT limit merging to signals with identical trigger wording — trigger conditions are considered equivalent if they describe the same underlying game situation from different angles. Do NOT merge signals that require clearly distinct responses where unifying the policy would weaken one of them.
+- [KEEP]: Emit this tag when a signal's Policy was explicitly executed in this game AND doing so was causally beneficial to the agent winning. [KEEP] is a positive vouching action — emit it only when you are confident the Policy deserves credit for the outcome. Do NOT emit [KEEP] merely because the agent won; the signal's Policy must have been directly followed and must have contributed to the win. Do NOT emit [KEEP] if the game was a draw or a loss. Unmentioned signals carry no implication — [KEEP] is not a default; it is a deliberate endorsement.
+  ⚠ [KEEP] protects only the Policy field of the named signal. You may still emit a concurrent [MODIFY] on the same signal's When or What fields if those fields need updating — [KEEP] will not block those changes. Only the Policy field is shielded.
 
-You may include as many update entries as necessary. A single gradient report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, etc., depending on what the game data supports.
+You may include as many update entries as necessary. A single gradient report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, multiple [KEEP]s, etc., depending on what the game data supports.
 
-⚠ OPPONENT-BEHAVIOR-ONLY RULE: Every signal you report — whether REMOVE, ADD, MODIFY, or MERGE — MUST describe a behavioral pattern of the OPPONENT, not the agent's own strategy. Concretely: the When and What fields must be grounded in observable actions taken by the opponent during this game. 
+⚠ OPPONENT-BEHAVIOR-ONLY RULE: Every signal you report — whether REMOVE, ADD, MODIFY, MERGE, or KEEP — MUST describe a behavioral pattern of the OPPONENT, not the agent's own strategy. Concretely: the When and What fields must be grounded in observable actions taken by the opponent during this game. 
 
 ⚠ VERIFICATION RULE: Do not assert untested opponent behavior. You must only describe behaviors and responses that were explicitly triggered and observed in the current game. If a specific action was never taken by the agent, you cannot make claims about how the opponent would have reacted to it.
 
@@ -94,31 +96,37 @@ You may include as many update entries as necessary. A single gradient report ca
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
 ⚠ PRE-ANALYSIS (complete both steps in your internal reasoning before writing any entries):
-1. AGENT SIGNAL AUDIT: Go through each window summary in the AGENT'S IN-GAME OBSERVATIONS above and extract: (a) which LTM signals the agent explicitly activated this game, (b) which Policy actions were actually executed as a result, and (c) what the board outcome was. These are the only link you have to how the reputation memory was used in-game, so analyze them carefully. If a signal's Policy was followed but the outcome was poor or neutral, prioritize a [MODIFY] on that signal's Policy so the agent does not repeat the same mistake.
+1. AGENT SIGNAL AUDIT: Go through each window summary in the AGENT'S IN-GAME OBSERVATIONS above and extract: (a) which LTM signals the agent explicitly activated this game, (b) which Policy actions were actually executed as a result, and (c) what the board outcome was. These are the only link you have to how the reputation memory was used in-game, so analyze them carefully. If a signal's Policy was followed but the outcome was poor or neutral, prioritize a [MODIFY] on that signal's Policy so the agent does not repeat the same mistake. If the agent won and a signal's Policy was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
 2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Explicitly compare what the opponent communicated versus their physical moves to determine if they tend to bluff, negotiate honestly, or manipulate. If no chat is present, skip this step.
 
 
 Each entry in the gradient report MUST adhere to these structural rules:
 
 - [REMOVE] Signal: <exact name from database>
-  - Reason: <one sentence citing the specific ground truth observation that contradicts this signal>
+  - Reason: <one or two sentences citing the specific ground truth observation that contradicts this signal>
 
 - [ADD] Signal: <new signal name>
+  - Reason: <one or two sentences explaining why this new signal is warranted and not covered by any existing entry>
   - When: <specific trigger condition observation — max 4 sentences>
   - What: <specific behavior observation — max 4 sentences>
   - Policy: <concrete executable action — max 4 sentences>
 
 - [MODIFY] Signal: <exact name from database>
+  - Reason: <one or two sentences explaining what evidence from this game justifies the change>
   - Field: <Name of Field to Change, e.g., When, What, or Policy>
     - Old: <current text>
     - New: <replacement text>
   (List only the fields that are changing. Omit unchanged fields.)
 
 - [MERGE] Signals: <Signal A Name> + <Signal B Name>
+  - Reason: <one or two sentences explaining why a single unified policy serves both triggering situations equally well>
   - Into Signal: <new unified signal name>
   - When: <unified trigger condition — max 4 sentences>
   - What: <unified behavior description — max 4 sentences>
   - Policy: <concrete executable unified policy — max 4 sentences>
+
+- [KEEP] Signal: <exact name from database>
+  - Reason: <one or two sentences explaining how this signal's Policy was executed this game and why it was causally beneficial to the agent's win>
 
 ⚠ ANTI-VAGUENESS RULE: The policy MUST name a concrete, executable action. 
 ⚠ BREVITY RULE: Each of When, What, and Policy MUST be at most 4 sentences.
@@ -174,13 +182,15 @@ You have just finished {n} game(s). Each gradient report contains feedback tags 
   - The Policy MUST NOT assume untested opponent behavior when prescribing actions.
 
 --- APPLICATION RULES ---
-Your role is Synthesizer. Update the Opponent Reputation Database by applying the gradient report(s):
+Your role is Synthesizer. Update the Opponent Reputation Database by applying the gradient report(s).
+Note: each gradient entry includes a Reason field for your context. Use the Reason to better understand the intent and evidence behind an instruction, but do not copy Reason fields into the final database output.
 
 1. **[REMOVE]**: Find the named signal in the current database. Delete it entirely.
 2. **[ADD]**: Insert the new signal exactly as written in the gradient report. No changes.
 3. **[MODIFY]**: Find the named signal. For each listed field, overwrite the `Old` value with the `New` value. Leave all other fields untouched.
 4. **[MERGE]**: Remove both named signals. Insert the merged signal exactly as written.
-5. **ANTI-VAGUENESS RULE**: The policy MUST name a concrete, executable action. Reject any policy that could apply generically to any opponent (e.g., "be cautious", "pay attention to their behavior").
+5. **[KEEP]**: Record that the named signal's Policy was vouched for as causally beneficial in a winning game. The Policy field of this signal is protected — see reconciliation rule 8 below for how to apply this when conflicts arise.
+6. **ANTI-VAGUENESS RULE**: The policy MUST name a concrete, executable action. Reject any policy that could apply generically to any opponent (e.g., "be cautious", "pay attention to their behavior").
 
 --- BATCH RECONCILIATION RULES (apply when {n} > 1) ---
 When the same signal receives conflicting instructions across the {n} gradient reports, resolve as follows:
@@ -192,6 +202,7 @@ When the same signal receives conflicting instructions across the {n} gradient r
 5. **[MODIFY] on the same field, contradicting directions** → take the union; abstract to the more general condition that covers both observations.
 6. **[MERGE] where a named signal does not exist** → convert to [MODIFY] on the surviving signal.
 7. **[MERGE] in some games, [MODIFY] in others on the same signals** → execute the [MERGE] and fold in the modifications.
+8. **[KEEP] vs [MODIFY] on the Policy field of the same signal** → apply the [MODIFY] only if it makes the Policy more specific or correct without changing the core prescribed action. If the [MODIFY] would change the core executable action itself (i.e., prescribe a fundamentally different response), prefer [KEEP] and discard that [MODIFY] on the Policy field. [KEEP] does NOT block [MODIFY] on the When or What fields — those may be updated freely.
 
 --- SYNTHESIS QUALITY RULES ---
 - **Abstract and Generalize**: Do not include game-specific details (specific round numbers, one-off board states). Produce generalized behavioral descriptions that apply across games.
@@ -281,15 +292,17 @@ A high-quality report captures BOTH types of signals:
   - The Policy MUST be a concrete, executable action.
   - The Policy MUST NOT describe opponent behavior — it must prescribe only what the agent itself should do.
 
-Analyze the game and propose updates using the following 4 tags:
+Analyze the game and propose updates using the following 5 tags:
 - [REMOVE]: Identify a signal whose core observed behavior (When/What) is directly contradicted by the ground truth, or whose signal is net harmful to retain. Do NOT use [REMOVE] if only the Policy is wrong; use [MODIFY] instead. Do NOT use [REMOVE] simply because a signal's trigger was not encountered this game.
 - [ADD]: Define a completely new self-pattern not yet covered by any signal. If an existing signal partially covers it, use [MODIFY] instead.
 - [MODIFY]: Identify an existing signal worth keeping but with inaccurate, misleading, too general, or too specific fields. Only list fields that are changing.
 - [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior. Use [MERGE] liberally: two signals should be merged if a single, unified policy would serve the agent equally well in both triggering situations. Prefer [MERGE] over a combination of [MODIFY]+[ADD] whenever the new game evidence is already partially captured by two separate existing signals that happen to co-occur or have similar triggers. Do NOT limit merging to signals with identical trigger wording — trigger conditions are considered equivalent if they describe the same underlying game situation from different angles. Do NOT merge signals that require clearly distinct responses where unifying the policy would weaken one of them.
+- [KEEP]: Emit this tag when a self-signal's Policy was explicitly executed in this game AND doing so was causally beneficial to the agent winning. [KEEP] is a positive vouching action — emit it only when you are confident the Policy deserves credit for the outcome. Do NOT emit [KEEP] merely because the agent won; the signal's Policy must have been directly followed and must have contributed to the win. Do NOT emit [KEEP] if the game was a draw or a loss. Unmentioned signals carry no implication — [KEEP] is not a default; it is a deliberate endorsement.
+  ⚠ [KEEP] protects only the Policy field of the named signal. You may still emit a concurrent [MODIFY] on the same signal's When or What fields if those fields need updating — [KEEP] will not block those changes. Only the Policy field is shielded.
 
 You may include as many update entries as necessary.
 
-⚠ AGENT-BEHAVIOR-ONLY RULE: Every signal you report — whether REMOVE, ADD, MODIFY, or MERGE — MUST describe a pattern in the AGENT'S OWN play, not the opponent's behavior. The When and What fields must be grounded in the agent's own actions and board positions.
+⚠ AGENT-BEHAVIOR-ONLY RULE: Every signal you report — whether REMOVE, ADD, MODIFY, MERGE, or KEEP — MUST describe a pattern in the AGENT'S OWN play, not the opponent's behavior. The When and What fields must be grounded in the agent's own actions and board positions.
 
 ⚠ VERIFICATION RULE: Do not assert unobserved agent behavior. Only describe patterns that were explicitly triggered and observed in the current game.
 
@@ -303,33 +316,39 @@ You may include as many update entries as necessary.
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
 ⚠ PRE-ANALYSIS (complete both steps in your internal reasoning before writing any entries):
-1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the corrective Policy (FLAW) or reinforced the tactic (STRENGTH), (c) what the board outcome was. If a FLAW signal fired and the agent repeated the bad habit, prioritize a [MODIFY] on that signal's Policy to make the correction more explicit or forceful. If a FLAW signal fired and the agent successfully followed its corrective Policy, you are STRICTLY FORBIDDEN from proposing a new STRENGTH [ADD] for this success. Instead, rely on the existing FLAW to guide future play. If a STRENGTH signal fired and the agent failed to use the tactic, propose a [MODIFY] to make the reinforcement more explicit.
+1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the corrective Policy (FLAW) or reinforced the tactic (STRENGTH), (c) what the board outcome was. If a FLAW signal fired and the agent repeated the bad habit, prioritize a [MODIFY] on that signal's Policy to make the correction more explicit or forceful. If a FLAW signal fired and the agent successfully followed its corrective Policy, you are STRICTLY FORBIDDEN from proposing a new STRENGTH [ADD] for this success. Instead, rely on the existing FLAW to guide future play. If a STRENGTH signal fired and the agent failed to use the tactic, propose a [MODIFY] to make the reinforcement more explicit. If the agent won and a self-signal's Policy was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
 2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Evaluate whether the agent's chat strategy was effective or counterproductive. Note any self-patterns in how the agent used chat.
 
 
 Each entry in the self-gradient report MUST adhere to these structural rules:
 
 - [REMOVE] Signal: <exact name from database>
-  - Reason: <one sentence citing the specific ground truth observation that contradicts this signal>
+  - Reason: <one or two sentences citing the specific ground truth observation that contradicts this signal>
 
 - [ADD] Signal: <new signal name>
+  - Reason: <one or two sentences explaining why this new self-pattern is warranted and not covered by any existing entry>
   - Type: <FLAW | STRENGTH>
   - When: <specific trigger condition — max 4 sentences>
   - What: <specific behavior observation — max 4 sentences>
   - Policy: <concrete executable action — max 4 sentences>
 
 - [MODIFY] Signal: <exact name from database>
+  - Reason: <one or two sentences explaining what evidence from this game justifies the change>
   - Field: <Name of Field to Change, e.g., When, What, Type, or Policy>
     - Old: <current text>
     - New: <replacement text>
   (List only the fields that are changing. Omit unchanged fields.)
 
 - [MERGE] Signals: <Signal A Name> + <Signal B Name>
+  - Reason: <one or two sentences explaining why a single unified policy serves both triggering situations equally well>
   - Into Signal: <new unified signal name>
   - Type: <FLAW | STRENGTH>
   - When: <unified trigger condition — max 4 sentences>
   - What: <unified behavior description — max 4 sentences>
   - Policy: <concrete executable unified policy — max 4 sentences>
+
+- [KEEP] Signal: <exact name from database>
+  - Reason: <one or two sentences explaining how this signal's Policy was executed this game and why it was causally beneficial to the agent's win>
 
 ⚠ ANTI-VAGUENESS RULE: The Policy MUST name a concrete, executable action. Reject any policy that could apply generically to any game situation.
 ⚠ BREVITY RULE: Each of When, What, and Policy MUST be at most 4 sentences.
@@ -362,13 +381,15 @@ You have just finished {n} game(s). Each self-gradient report contains feedback 
   - The Policy MUST be a concrete, executable action.
 
 --- APPLICATION RULES ---
-Your role is Synthesizer. Update the Self-Reputation Database by applying the gradient report(s):
+Your role is Synthesizer. Update the Self-Reputation Database by applying the gradient report(s).
+Note: each gradient entry includes a Reason field for your context. Use the Reason to better understand the intent and evidence behind an instruction, but do not copy Reason fields into the final database output.
 
 1. **[REMOVE]**: Find the named signal. Delete it entirely.
 2. **[ADD]**: Insert the new signal exactly as written. No changes.
 3. **[MODIFY]**: Find the named signal. For each listed field, overwrite the `Old` value with the `New` value. Leave all other fields untouched.
 4. **[MERGE]**: Remove both named signals. Insert the merged signal exactly as written.
-5. **ANTI-VAGUENESS RULE**: The Policy MUST name a concrete, executable action.
+5. **[KEEP]**: Record that the named signal's Policy was vouched for as causally beneficial in a winning game. The Policy field of this signal is protected — see reconciliation rule 8 below for how to apply this when conflicts arise.
+6. **ANTI-VAGUENESS RULE**: The Policy MUST name a concrete, executable action.
 
 --- BATCH RECONCILIATION RULES (apply when {n} > 1) ---
 When the same signal receives conflicting instructions across the {n} gradient reports, resolve as follows:
@@ -380,6 +401,7 @@ When the same signal receives conflicting instructions across the {n} gradient r
 5. **[MODIFY] on the same field, contradicting directions** → take the union; abstract to the more general condition covering both.
 6. **[MERGE] where a named signal does not exist** → convert to [MODIFY] on the surviving signal.
 7. **[MERGE] in some games, [MODIFY] in others on the same signals** → execute the [MERGE] and fold in the modifications.
+8. **[KEEP] vs [MODIFY] on the Policy field of the same signal** → apply the [MODIFY] only if it makes the Policy more specific or correct without changing the core prescribed action. If the [MODIFY] would change the core executable action itself (i.e., prescribe a fundamentally different response), prefer [KEEP] and discard that [MODIFY] on the Policy field. [KEEP] does NOT block [MODIFY] on the When or What fields — those may be updated freely.
 
 --- SYNTHESIS QUALITY RULES ---
 - **Abstract and Generalize**: Do not include game-specific details. Produce generalized descriptions that apply across games.

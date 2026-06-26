@@ -90,37 +90,42 @@ class SlidingWindowAgent(PromptAgent):
         env_name = self.current_game_name or "unknown"
         current_notes = self.sw_store.get(env_name) or "(No notes yet)"
         
-        formatted_histories = ""
-        for i, h in enumerate(game_histories):
-            formatted_histories += f"=== Game {i+1} ===\n{h}\n\n"
-            
-        update_prompt = SW_UPDATE_PROMPT.format(
-            game_name=env_name,
-            game_intro=getattr(self, 'current_game_intro', "Game rules unavailable."),
-            n=n,
-            old_notes=current_notes,
-            game_histories=formatted_histories
-        )
+        # Split game_histories into chunks of at most 4 games to avoid 32k context limits
+        chunk_size = 4
+        chunks = [game_histories[i:i + chunk_size] for i in range(0, len(game_histories), chunk_size)]
         
-        messages = [{"role": "user", "content": update_prompt}]
-        try:
-            from gamingbench.utils.utils import strip_thinking_block
-            generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-            new_notes = strip_thinking_block(generations[0])
-        except Exception as e:
-            self.logger.error(f"Failed to generate SW update: {e}")
-            new_notes = current_notes
+        for chunk_idx, chunk in enumerate(chunks):
+            chunk_n = len(chunk)
+            formatted_histories = ""
+            for i, h in enumerate(chunk):
+                formatted_histories += f"=== Game {chunk_idx * chunk_size + i + 1} ===\n{h}\n\n"
+                
+            update_prompt = SW_UPDATE_PROMPT.format(
+                game_name=env_name,
+                game_intro=getattr(self, 'current_game_intro', "Game rules unavailable."),
+                n=chunk_n,
+                old_notes=current_notes,
+                game_histories=formatted_histories
+            )
             
-        self.logger.info(f'Batch New Notes (N={n}):\n{new_notes}')
-        
-        # Trace log
-        log_file = self.sw_store_path.replace('.json', '_trace.log')
-        with open(log_file, 'a') as f:
-            f.write(f'=== BATCH FLUSH (N={n}) SW UPDATE ===\n')
-            f.write(f"PROMPT:\n{update_prompt}\n")
-            f.write(f'SYNTHESIZED NOTES:\n{new_notes}\n')
-            f.write('=' * 50 + '\n\n')
+            messages = [{"role": "user", "content": update_prompt}]
+            try:
+                from gamingbench.utils.utils import strip_thinking_block
+                generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                current_notes = strip_thinking_block(generations[0])
+            except Exception as e:
+                self.logger.error(f"Failed to generate SW update for chunk {chunk_idx}: {e}")
+                
+            self.logger.info(f'Chunk {chunk_idx} New Notes (N={chunk_n}):\n{current_notes}')
             
-        # Save
-        self.sw_store.update(env_name, new_notes)
+            # Trace log
+            log_file = self.sw_store_path.replace('.json', '_trace.log')
+            with open(log_file, 'a') as f:
+                f.write(f'=== CHUNK {chunk_idx} FLUSH (N={chunk_n}) SW UPDATE ===\n')
+                f.write(f"PROMPT:\n{update_prompt}\n")
+                f.write(f'SYNTHESIZED NOTES:\n{current_notes}\n')
+                f.write('=' * 50 + '\n\n')
+                
+        # Save final notes after all chunks are processed
+        self.sw_store.update(env_name, current_notes)
         self.sw_store.save(self.sw_store_path)

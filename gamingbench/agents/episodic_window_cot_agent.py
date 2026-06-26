@@ -1,17 +1,18 @@
-from gamingbench.agents.prompt_agent import PromptAgent
+from gamingbench.agents.episodic_window_agent import EpisodicWindowAgent
 from gamingbench.prompts.step_prompts.cot_agent import construct_step_prompt
 
-
-class CoTAgent(PromptAgent):
-
+class EpisodicWindowCotAgent(EpisodicWindowAgent):
     def __init__(self, config, **kwargs):
-        super(CoTAgent, self).__init__(config)
-
+        super(EpisodicWindowCotAgent, self).__init__(config, **kwargs)
+        
+        # Override the step prompt constructor to use Chain of Thought
         self.step_prompt_constructor = construct_step_prompt
 
     def step(self, observations):
         """
-        Runs the step with a validation loop and retries, disabling native thinking.
+        Runs the EW-integrated step.
+        Overrides PromptAgent.step to explicitly pass enable_thinking=False
+        for fast CoT gameplay moves.
         """
         self.logger.info('-' * 20 + f'{self.agent_name} Begin' + '-' * 20)
         query_list = []
@@ -48,7 +49,6 @@ class CoTAgent(PromptAgent):
             moves = self.parse_with_regex(responses, regex)
             if len(moves) != 0:
                 move = self.post_processing(moves, majority_vote=getattr(self, "voting", False))
-                
                 # Normalize brackets and asterisks from move and valid_moves list to handle potential mismatch
                 def clean_action(act):
                     return act.replace('<', '').replace('>', '').replace('*', '').strip()
@@ -75,3 +75,29 @@ class CoTAgent(PromptAgent):
 
         self.logger.info('-' * 20 + f'{self.agent_name} End' + '-' * 20)
         return move, query_list
+
+    def chat_step(self, observations, chat_history_str: str):
+        if not self.enable_chat:
+            return "", None
+            
+        from gamingbench.prompts.chat_prompts import CHAT_INSTRUCTION
+        
+        self.logger.info('-' * 20 + f'{self.agent_name} Chat Generation' + '-' * 20)
+        
+        observations['chat_context'] = chat_history_str
+        system_prompt, observation_prompt = self._build_prompts(observations)
+        
+        observation_prompt = observation_prompt + '\n\n' + CHAT_INSTRUCTION
+        
+        msgs = self.construct_init_messages(system_prompt, observation_prompt)
+        
+        try:
+            from gamingbench.utils.utils import strip_thinking_block, strip_chat_tags
+            responses, query = self.llm_query(msgs, n=1, stop=None, prompt_type='move', enable_thinking=False)
+            message = strip_thinking_block(responses[0]).strip()
+            message = strip_chat_tags(message)
+            self.logger.info(f"Chat Generated: {message}")
+            return message, query
+        except Exception as e:
+            self.logger.error(f"Chat generation failed: {e}")
+            return "", None
