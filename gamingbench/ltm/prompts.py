@@ -65,7 +65,7 @@ The goal of this report is to improve the agent's knowledge of this opponent so 
 
 --- LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
-* When: The trigger condition — the full observable context and prior state that preceded or coincided with this behavior. Describe everything that could plausibly have driven the opponent's decision: the situational history, established patterns, and any relevant observable signals present at the time. Do not infer triggers that were not directly observed. Maximum 4 sentences.
+* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE the opponent takes their turn. Therefore, this field MUST describe the board state strictly prior to the opponent's action. It cannot describe the opponent's action itself, otherwise it will fire too late. Describe everything that could plausibly have driven the opponent's decision: the situational history, established patterns, and any relevant observable signals present at the time. Do not infer triggers that were not directly observed. Maximum 4 sentences.
 * What: The factual observation of what the opponent did. Write only what was directly observed. Never use conditional language (e.g., "as long as", "whenever", "unless") — those imply rules that may not have been tested. If a condition was not tested, state that explicitly. Maximum 4 sentences.
 * Policy: The concrete action to execute. It is crucial that this policy is well-designed to be strictly actionable immediately when the 'When' condition fires. If there are different game states or edge cases where following this general policy would actively harm the agent (e.g., following a defensive rule during a winning race), you MUST explicitly list those exceptions and provide the alternative conditional policy for those specific cases. Maximum 6 sentences.
   - If all relevant opponent behavior has been observed: prescribe the optimal exploitation action directly.
@@ -173,7 +173,7 @@ You have just finished {n} game(s). Each gradient report contains feedback tags 
 
 --- LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
-* When: The specific trigger condition or game state that causes the behavior.
+* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE the opponent takes their turn. Therefore, this field MUST describe the board state strictly prior to the opponent's action. It cannot describe the opponent's action itself, otherwise it will fire too late. Describe the specific trigger condition or game state that causes the behavior. Maximum 4 sentences.
 * What: A description of the opponent's behavior.
 * Policy: The concrete action to execute. It is crucial that this policy is well-designed to be strictly actionable immediately when the 'When' condition fires. If there are different game states or edge cases where following this general policy would actively harm the agent (e.g., following a defensive rule during a winning race), you MUST explicitly list those exceptions and provide the alternative conditional policy for those specific cases. Maximum 6 sentences.
   - If all relevant opponent behavior has been observed: prescribe the optimal exploitation action directly.
@@ -239,11 +239,11 @@ Each entry describes a behavioral pattern you have repeatedly exhibited across p
 {self_ltm_text}
 
 --- HOW TO USE THIS DATABASE ---
-1. Identify which signals are firing: Match the current board state and game context strictly against the 'When' field. A signal fires as soon as its 'When' condition is met.
-2. Treat 'When' as a probabilistic prior, not a fact: If live evidence strongly contradicts the 'When' condition, you may down-weight the signal.
-   ⚠ CRITICAL EXCEPTION: Rule 2 applies ONLY to the 'When' trigger field. It does NOT apply to the Policy field. Once a signal's trigger is confirmed, the Policy is a mandatory executable action.
-3. Use 'What' for self-awareness: Once a signal fires, read the 'What' field to understand your own pattern so you can consciously avoid it.
-4. Execute the Policy exactly as written to correct your tendency.
+1. Identify which signals are firing: Match the current board state and game context strictly against the 'When' field. A signal fires when its trigger condition is exactly met.
+2. Use 'What' for self-awareness: Once a signal fires, read the 'What' field to understand your own flawed pattern so you can consciously avoid it.
+3. Execute the Policy: Follow the prescribed corrective action to override your tendency.
+   ⚠ POLICY HARM EXCEPTION: The one permitted override is when executing the Policy-prescribed action would be directly harmful to your position in the current game state — meaning the action itself actively worsens your standing (e.g., it allows the opponent an immediate decisive advantage, or forces a self-defeating move). If the prescribed action is neutral or beneficial, you MUST follow the Policy. This exception is NOT a license to ignore the Policy on general strategic grounds — it applies only when the prescribed action is concretely harmful right now.
+4. Conflict Resolution: If multiple self-signals fire simultaneously and suggest conflicting Policies, prioritize the one that prevents the most immediate tactical disaster. If both are equal, use your best judgment to blend them.
 === END SELF-REPUTATION DATABASE ===
 """
 
@@ -272,12 +272,16 @@ A high-quality report captures ONLY FLAW signals — patterns where the agent's 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern in the agent's own play.
 * Type: FLAW.
-* When: The trigger condition. Describe only directly observable game state, not inferences about the opponent. Maximum 4 sentences.
+* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it makes a recurring mistake, so it can correct itself. Therefore, this field MUST describe the board state strictly prior to the agent's action. It cannot describe the flawed action itself, otherwise it will fire too late. Describe only directly observable game state, not inferences about the opponent. Maximum 4 sentences.
 * What: What the agent typically does incorrectly in this situation. Maximum 4 sentences.
 * Policy: The concrete action to execute. It is crucial that this policy is well-designed to be strictly actionable immediately when the 'When' condition fires. If there are different game states or edge cases where following this general policy would actively harm the agent (e.g., following a defensive rule during a winning race), you MUST explicitly list those exceptions and provide the alternative conditional policy for those specific cases. Maximum 6 sentences.
 
 Analyze the game and propose updates using the following 5 tags:
-- [REMOVE]: Identify a signal whose core observed behavior is contradicted by the ground truth, or whose signal is net harmful to retain.
+- [REMOVE]: A FLAW signal can ONLY be removed if it is conceptually or factually invalid. This means:
+    1. Factually Incorrect / Hallucinated: The trigger (When) or behavior (What) describes a physical impossibility under the game rules, or relies on a hallucinated state/mechanic.
+    2. Strategic Misidentification (False Positive): The behavior described in 'What' is not actually a mistake or flaw. It is a valid strategic choice or neutral move, and labeling it as a FLAW harms the agent.
+    3. Erroneous Attribution: The signal falsely attributes a game loss to a completely unrelated action.
+  ⚠ CRITICAL PROHIBITION: You are strictly forbidden from proposing [REMOVE] for a FLAW signal simply because the agent did not exhibit the flaw this game, or because the agent successfully followed the corrective Policy to avoid it. The absence of the flaw in the presence of its active policy is proof of the database's success, not redundancy. Do NOT use [REMOVE] if only the Policy needs updating; use [MODIFY] instead.
 - [ADD]: Define a completely new self-pattern not yet covered by any signal.
 - [MODIFY]: Identify an existing signal worth keeping but with inaccurate fields.
 - [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior.
@@ -353,7 +357,7 @@ You have just finished {n} game(s). Each self-gradient report contains feedback 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
 * Type: FLAW (a recurring mistake to correct).
-* When: The specific trigger condition.
+* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it makes a recurring mistake, so it can correct itself. Therefore, this field MUST describe the board state strictly prior to the agent's action. It cannot describe the flawed action itself, otherwise it will fire too late. Describe the specific trigger condition. Maximum 4 sentences.
 * What: What the agent does incorrectly.
 * Policy: The concrete action to execute. It is crucial that this policy is well-designed to be strictly actionable immediately when the 'When' condition fires. If there are different game states or edge cases where following this general policy would actively harm the agent (e.g., following a defensive rule during a winning race), you MUST explicitly list those exceptions and provide the alternative conditional policy for those specific cases. Maximum 6 sentences.
 
