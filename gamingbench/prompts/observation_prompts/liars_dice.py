@@ -35,3 +35,12 @@ def construct_observation_prompt(observations):
     player_idx = observations.get("player_idx", 0)
     prompt = f"You are playing as Player {player_idx + 1}.\n" + prompt
     return prompt
+
+
+def _construct_game_history_legend():
+    return """\
+- [Your Dice]: The face value of your own die this turn (1–6). This is the only die value you can see — the opponent's die is hidden.
+- [Opponent Dice]: Listed in the history as the opponent's die value, but this is ONLY revealed at the end of the game when a <Liar> challenge is made. During the game, each player only knows their own die.
+- [Move]: The action taken this turn. Bids are written as <x dices, y value>, meaning the bidder claims there are at least x dice showing face value y across BOTH dice combined (2 total dice in the game). <Liar> means the player is challenging the previous bid — both dice are then revealed and the claim is verified.
+- [Outcome]: At game end, if <Liar> was called, the true dice values are revealed. The challenger wins if the previous bid was false (actual count < claimed count); the bidder wins if the bid was true (actual count >= claimed count).\
+"""

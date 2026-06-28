@@ -57,11 +57,13 @@ class LTMCotAgent(LTMAgent):
                 scan_sources.append("OPPONENT REPUTATION DATABASE")
             scan_label = " and ".join(scan_sources)
 
-            step_prompt = f"""Reason through your move using the three stages below. All three stages are part of your thinking and must appear in your output.
+            step_prompt = f"""Reason through your move using the four stages below. All four stages are part of your thinking and must appear in your output.
 
 Your output must be in the following format strictly:
 
 Thought:
+[Board Analysis] First, carefully parse the board state. Identify where your pieces are, where the opponent's pieces are, and which direction you are moving.
+
 [Signal Scan] For each signal in your {scan_label}, carefully reason through whether its 'When' condition is met by the current board state and game context. Conclude clearly whether it fires.
 
 [Policy Synthesis] Synthesize the active policies from all firing signals into a coherent strategic directive for this move.
