@@ -45,7 +45,7 @@ class LTMCotAgent(LTMAgent):
         has_self_ltm = bool(self.self_ltm_store.get("__self__"))
 
         if has_opponent_ltm or has_self_ltm:
-            # 3-stage structured Thought format — signal evaluation is woven into
+            # Structured Thought format — signal evaluation is woven into
             # the reasoning itself so the agent cannot skip it or apply it post-hoc.
             from gamingbench.prompts.regex_and_format import get_step_env_regex_and_format
             _, fmt = get_step_env_regex_and_format(observations.get('env_name', ''))
@@ -57,18 +57,28 @@ class LTMCotAgent(LTMAgent):
                 scan_sources.append("OPPONENT REPUTATION DATABASE")
             scan_label = " and ".join(scan_sources)
 
-            step_prompt = f"""Reason through your move using the four stages below. All four stages are part of your thinking and must appear in your output.
+            cot_stages = []
+            cot_stages.append("[Board Analysis] First, carefully parse the board state. Identify where your pieces are, where the opponent's pieces are, and which direction you are moving.")
+            cot_stages.append(f"[Signal Scan] For each signal in your {scan_label}, carefully reason through whether its 'When' condition is met by the current board state and game context. Conclude clearly whether it fires.")
+            
+            if has_opponent_ltm:
+                cot_stages.append("[Opponent Policy Synthesis] Synthesize the active Policies from any firing OPPONENT signals into a coherent strategy for this move, and formulate your natural top candidate move.")
+            else:
+                cot_stages.append("[Candidate Move] Based on the board state, formulate your top candidate move.")
+                
+            if has_self_ltm:
+                cot_stages.append("[Guardrail Verification] Check if your candidate move matches the 'What' field of any firing SELF signals. If so, execute their 'Verification' calculation to ensure the 'Flaw' will not materialize. If the verification shows the flaw will occur, you MUST reject the candidate and formulate a new move.")
+                
+            cot_stages.append("[Final Decision] State your final chosen move based on the reasoning above.")
+            
+            stages_text = "\n\n".join(cot_stages)
+
+            step_prompt = f"""Reason through your move using the stages below. All stages are part of your thinking and must appear in your output.
 
 Your output must be in the following format strictly:
 
 Thought:
-[Board Analysis] First, carefully parse the board state. Identify where your pieces are, where the opponent's pieces are, and which direction you are moving.
-
-[Signal Scan] For each signal in your {scan_label}, carefully reason through whether its 'When' condition is met by the current board state and game context. Conclude clearly whether it fires.
-
-[Policy Synthesis] Synthesize the active policies from all firing signals into a coherent strategic directive for this move.
-
-[Move Reasoning] Given the board state and your synthesized policy, reason about the legal moves and choose the best one.
+{stages_text}
 
 Action:
 Your action wrapped by <>, i.e., {fmt}
