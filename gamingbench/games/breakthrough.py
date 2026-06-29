@@ -23,7 +23,19 @@ class Breakthrough(OpenSpielGame):
 
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
         opponent_idx = 1 if current_player_idx == 0 else 0
-        board_preview = str(str(self.env).split('\n')[:-2])
+        lines = str(self.env).split('\n')[:-2]
+        formatted_rows = []
+        for line in lines:
+            if not line:
+                continue
+            row_num = line[0]
+            pieces = line[1:]
+            row_parts = []
+            for i, char in enumerate(pieces):
+                col_label = chr(ord('a') + i)
+                row_parts.append(f"{col_label}{row_num}={char}")
+            formatted_rows.append(f"Row {row_num}: " + ", ".join(row_parts))
+        board_preview = "\n".join(formatted_rows)
         res = {
             'opponent_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(opponent_idx, [])),
             'self_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(current_player_idx, [])),

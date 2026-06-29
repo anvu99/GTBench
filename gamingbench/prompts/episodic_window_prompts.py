@@ -18,7 +18,7 @@ You are reviewing your experience in {game_name}.
 --- GAME HISTORY ---
 {game_history}
 
-In no more than 4 sentences, summarize what happened in this game that you want to remember for future game.
+In no more than 10 sentences, summarize what happened in this game that you want to remember for future game.
 """
 
 EW_WINDOW_SYNTHESIS_PROMPT = """\

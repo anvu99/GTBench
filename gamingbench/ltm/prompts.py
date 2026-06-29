@@ -97,6 +97,8 @@ You may include as many update entries as necessary. A single gradient report ca
 
 ⚠ NAMING FORMAT RULE: Signal names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase (e.g., "ChatNoiseSuppression").
 
+⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If an opponent's tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role they are playing, you MUST write the 'When', 'What', and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features (e.g., "Row 2", "White side", "moving North"). This ensures the memory remains actionable if the roles are reversed in future games.
+
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
 ⚠ PRE-ANALYSIS (complete both steps in your internal reasoning before writing any entries):
@@ -208,6 +210,7 @@ When the same signal receives conflicting instructions that meet their respectiv
 6. **[MODIFY] conflicts**: If modifying the same field with contradicting directions, take the union to cover both observations.
 
 --- SYNTHESIS QUALITY RULES ---
+- **Role-Agnostic Generalization**: If an opponent's tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role they are playing, you MUST write the 'When', 'What', and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features. This ensures the memory remains actionable if the roles are reversed in future games.
 - **Preserve Specificity**: Do not strip concrete tactical details (specific trigger states, concrete actions) in favor of vague generalizations. It is better to have multiple highly-specific signals than 1 abstract signal.
 - **Brevity**: When and What MUST be at most 4 sentences in the final database. The Policy MUST be at most 6 sentences. Distill by removing redundant phrasing — never by dropping distinct tactical conditions.
 - **NO AUTONOMOUS MERGING**: Do not merge or group signals unless explicitly commanded by a valid [MERGE] report that meets the quorum.
@@ -291,6 +294,8 @@ You may include as many update entries as necessary. A single self-gradient repo
 
 ⚠ AGENT-BEHAVIOR-ONLY RULE: Every signal you report MUST describe a pattern in the AGENT'S OWN play.
 ⚠ NAMING FORMAT RULE: Signal names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase.
+
+⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If your own flawed tactical pattern or mistake is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features (e.g., "Row 2", "White side", "moving North"). This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
 
 ⚠ VERIFICATION RULE: Do not assert unobserved agent behavior. Only describe patterns that were explicitly triggered and observed in the current game.
 
@@ -388,6 +393,7 @@ When the same signal receives conflicting instructions that meet their respectiv
 6. **[MODIFY] conflicts**: If modifying the same field with contradicting directions, take the union to cover both observations.
 
 --- SYNTHESIS QUALITY RULES ---
+- **Role-Agnostic Generalization**: If your own flawed tactical pattern or mistake is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features. This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
 - **Preserve Specificity**: Do not strip concrete tactical details (specific trigger states, concrete corrective actions) in favor of vague generalizations. It is better to have multiple highly-specific signals than 1 abstract signal.
 - **Brevity**: When and What MUST be at most 4 sentences in the final database. The Policy MUST be at most 6 sentences. Distill by removing redundant phrasing — never by dropping distinct tactical conditions or concrete corrective actions.
 - **NO AUTONOMOUS MERGING**: Do not merge or group signals unless explicitly commanded by a valid [MERGE] report that meets the quorum.
