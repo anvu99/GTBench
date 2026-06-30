@@ -336,7 +336,7 @@ class LTMAgent(PromptAgent):
                 cot_stages.append("[Candidate Move] Based on the board state, formulate your top candidate move.")
                 
             if has_self_ltm:
-                cot_stages.append("[Guardrail Verification] Check if your candidate move matches the 'What' field of any firing SELF signals. If so, execute their 'Verification' calculation to ensure the 'Flaw' will not materialize. If the verification shows the flaw will occur, you MUST reject the candidate and formulate a new move.")
+                cot_stages.append("[Guardrail Verification] Check if your candidate move matches the 'What' field of any firing SELF signals. If so, execute their 'Verification' calculation to ensure the 'Risk' will not materialize. If the verification shows the risk will occur, you MUST reject the candidate and formulate a new move.")
                 
             cot_stages.append("[Final Decision] State your final chosen move based on the reasoning above.")
             

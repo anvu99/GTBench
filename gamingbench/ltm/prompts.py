@@ -75,7 +75,7 @@ The goal of this report is to improve the agent's knowledge of this opponent so 
 Analyze the game and propose updates using the following 5 tags:
 - [REMOVE]: Identify a signal whose core observed behavior (When/What) is directly contradicted by the ground truth, or whose entire signal — even after potential modification — is net harmful to retain. Do NOT use [REMOVE] if only the Policy is wrong; use [MODIFY] to fix the Policy instead. Do NOT use [REMOVE] simply because a signal's trigger was not encountered this game — absence of evidence is not contradiction.
 - [ADD]: Define a completely new observed behavior not yet covered by any signal in the current database. If an existing signal partially covers the behavior but one or more fields are incorrect, use [MODIFY] instead of adding a duplicate.
-- [MODIFY]: Identify an existing signal worth keeping, but whose one or more fields are inaccurate, misleading, too general, or too specific based on the current game evidence. Prefer [MODIFY] over [ADD] when the behavior is already partially captured by an existing signal. Only list the fields that are changing; omit all unchanged fields.
+- [MODIFY]: Identify an existing signal worth keeping, but whose one or more fields are inaccurate, misleading, or too specific based on the current game evidence. Prefer [MODIFY] over [ADD] when the behavior is already partially captured by an existing signal. Only list the fields that are changing; omit all unchanged fields.
 - [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior. Use [MERGE] conservatively: do NOT merge signals if unifying the policy would dilute their specific tactical responses. Prefer keeping highly specific, effective signals separate rather than creating one abstract signal. Two signals should only be merged if a single, unified policy is identical for both triggering situations and no tactical specificity is lost.
 - [KEEP]: Emit this tag when a signal's Policy was explicitly executed in this game AND doing so was causally beneficial to the agent winning. [KEEP] is a positive vouching action — emit it only when you are confident the Policy deserves credit for the outcome. Do NOT emit [KEEP] merely because the agent won; the signal's Policy must have been directly followed and must have contributed to the win. Do NOT emit [KEEP] if the game was a draw or a loss. Unmentioned signals carry no implication — [KEEP] is not a default; it is a deliberate endorsement.
   ⚠ [KEEP] protects only the Policy field of the named signal. You may still emit a concurrent [MODIFY] on the same signal's When or What fields if those fields need updating — [KEEP] will not block those changes. Only the Policy field is shielded.
@@ -234,17 +234,17 @@ From your experience in previous games, you have accumulated the following knowl
 Each entry describes a behavioral pattern you have repeatedly exhibited across past games. The fields mean:
 - Signal: A short name for the recurring pattern in your own play.
 - When: The board state or situation that activates this signal. This is the SOLE criterion for determining whether a signal fires.
-- What: A specific move or plan you frequently consider or execute in this situation. Use this for self-recognition.
-- Flaw: The negative consequence or vulnerability that may arise if you execute 'What'.
-- Verification: The specific check or calculation you must perform to determine if the 'Flaw' will actually materialize in the exact current position.
+- What: A specific move or plan you frequently consider or execute in this situation. Use this to recognize if your current candidate move falls into this potentially dangerous pattern.
+- Risk: The specific negative outcome or vulnerability that MAY happen if you execute 'What'.
+- Verification: The specific check or calculation you must perform to determine if the 'Risk' will actually materialize in the exact current position.
 
 --- SELF-REPUTATION DATABASE ---
 {self_ltm_text}
 
 --- HOW TO USE THIS DATABASE ---
 1. Identify which signals are firing: Match the current board state and game context strictly against the 'When' field. A signal fires when its trigger condition is exactly met.
-2. The Guardrail Check: Evaluate your natural top candidate move. IF your intended move matches the 'What' field, you must be careful about the potential 'Flaw'.
-3. The Verification Step: If your intended move matches the 'What' field, you MUST follow the 'Verification' rule to check if the 'Flaw' will actually occur. If the verification shows the flaw will occur, you MUST abort the move and find an alternative. If the verification confirms it is safe, you may proceed with the move.
+2. The Guardrail Check: Formulate your natural top candidate move. IF your intended move matches the 'What' field of a firing signal, you must be careful about the potential 'Risk'. IF it does NOT match, the signal does not apply to your move.
+3. The Verification Step: If your intended move matches the 'What' field, you MUST follow the 'Verification' rule to check if the 'Risk' will actually occur. If the verification shows the risk will occur, you MUST abort the move and find an alternative. If the verification confirms it is safe, you may proceed with the move.
 === END SELF-REPUTATION DATABASE ===
 """
 
@@ -273,16 +273,16 @@ A high-quality report captures ONLY patterns that require strict verification �
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern in the agent's own play.
 * When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it executes a potentially risky pattern, so it can verify the danger. Therefore, this field MUST describe the board state strictly prior to the agent's action. It cannot describe the action itself, otherwise it will fire too late. Describe only directly observable game state, not inferences about the opponent. Maximum 4 sentences.
-* What: A specific move or plan the agent frequently executes in this situation (which could be a generally good move, but carries a hidden risk). Maximum 4 sentences.
-* Flaw: The specific negative consequence or vulnerability that may be created by executing 'What'. Maximum 4 sentences.
-* Verification: The concrete check or calculation the agent must perform before executing 'What' to determine if the 'Flaw' will actually occur in the exact current position. Maximum 6 sentences.
+* What: A descriptive observation of the specific move or plan the agent frequently executes in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves. Maximum 4 sentences.
+* Risk: The specific negative consequence or vulnerability that MAY happen IF the agent executes the 'What' behavior. It MUST describe a negative outcome (e.g., "The opponent will capture your piece", "You will lose the promotion race"). Maximum 4 sentences.
+* Verification: The concrete check or calculation the agent must perform before executing 'What' to determine if the 'Risk' will actually occur in the exact current position. Maximum 6 sentences.
 
 Analyze the game and propose updates using the following 5 tags:
 - [REMOVE]: A signal can ONLY be removed if it is conceptually or factually invalid. This means:
     1. Factually Incorrect / Hallucinated: The trigger (When) or behavior (What) describes a physical impossibility under the game rules, or relies on a hallucinated state/mechanic.
-    2. Strategic Misidentification (False Positive): The 'Flaw' described does not actually exist or is not a real threat, making the 'Verification' step completely unnecessary. The 'What' behavior is fundamentally safe in this 'When' situation without needing verification.
+    2. Strategic Misidentification (False Positive): The 'Risk' described does not actually exist or is not a real threat, making the 'Verification' step completely unnecessary. The 'What' behavior is fundamentally safe in this 'When' situation without needing verification.
     3. Erroneous Attribution: The signal falsely attributes a game loss to a completely unrelated action.
-  ⚠ CRITICAL PROHIBITION: You are strictly forbidden from proposing [REMOVE] for a signal simply because the agent did not exhibit the flaw this game, or because the agent successfully followed the Verification rule to avoid it. The absence of the flaw in the presence of its active verification is proof of the database's success, not redundancy. Do NOT use [REMOVE] if only the Verification needs updating; use [MODIFY] instead.
+  ⚠ CRITICAL PROHIBITION: You are strictly forbidden from proposing [REMOVE] for a signal simply because the agent did not exhibit the risk this game, or because the agent successfully followed the Verification rule to avoid it. The absence of the risk in the presence of its active verification is proof of the database's success, not redundancy. Do NOT use [REMOVE] if only the Verification needs updating; use [MODIFY] instead.
 - [ADD]: Define a completely new self-pattern not yet covered by any signal.
 - [MODIFY]: Identify an existing signal worth keeping but with inaccurate fields.
 - [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior.
@@ -293,7 +293,7 @@ You may include as many update entries as necessary. A single self-gradient repo
 ⚠ AGENT-BEHAVIOR-ONLY RULE: Every signal you report MUST describe a pattern in the AGENT'S OWN play.
 ⚠ NAMING FORMAT RULE: Signal names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase.
 
-⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If your own tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', 'Flaw', and 'Verification' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features (e.g., "Row 2", "White side", "moving North"). This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
+⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If your own tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', 'Risk', and 'Verification' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features (e.g., "Row 2", "White side", "moving North"). This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
 
 ⚠ VERIFICATION RULE: Do not assert unobserved agent behavior. Only describe patterns that were explicitly triggered and observed in the current game.
 
@@ -309,7 +309,7 @@ You may include as many update entries as necessary. A single self-gradient repo
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
 ⚠ PRE-ANALYSIS (complete both steps in your internal reasoning before writing any entries):
-1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the Verification check, (c) what the board outcome was. If a signal fired and the agent blindly executed the move and suffered the Flaw, prioritize a [MODIFY] on that signal's Verification to make the check more explicit or forceful. If a signal fired and the agent successfully followed its Verification check, do NOT propose a new [ADD] for this success — rely on the existing signal to guide future play. If the agent won and a self-signal's Verification was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
+1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the Verification check, (c) what the board outcome was. If a signal fired and the agent blindly executed the move and suffered the Risk, prioritize a [MODIFY] on that signal's Verification to make the check more explicit or forceful. If a signal fired and the agent successfully followed its Verification check, do NOT propose a new [ADD] for this success — rely on the existing signal to guide future play. If the agent won and a self-signal's Verification was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
 2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Evaluate whether the agent's chat strategy was effective or counterproductive. Note any self-patterns in how the agent used chat.
 
 Each entry in the self-gradient report MUST adhere to these structural rules:
@@ -320,8 +320,8 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
 - [ADD] Signal: <new signal name>
   - Reason: <reason>
   - When: <trigger condition>
-  - What: <intended behavior>
-  - Flaw: <negative consequence>
+  - What: <descriptive observation of candidate move>
+  - Risk: <negative consequence>
   - Verification: <safety check to perform>
 
 - [MODIFY] Signal: <exact name from database>
@@ -334,15 +334,15 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
   - Reason: <reason>
   - Into Signal: <new unified signal name>
   - When: <unified trigger>
-  - What: <unified intended behavior>
-  - Flaw: <unified negative consequence>
+  - What: <unified descriptive observation of candidate move>
+  - Risk: <unified negative consequence>
   - Verification: <unified safety check>
 
 - [KEEP] Signal: <exact name from database>
   - Reason: <reason>
 
 ⚠ ANTI-VAGUENESS RULE: The Verification MUST name a concrete check or calculation.
-⚠ BREVITY RULE: Each of When, What, and Flaw MUST be at most 4 sentences. The Verification MUST be at most 6 sentences.
+⚠ BREVITY RULE: Each of When, What, and Risk MUST be at most 4 sentences. The Verification MUST be at most 6 sentences.
 
 If no notable self-patterns were observed, write: "No signals observed."
 """
@@ -360,9 +360,9 @@ You have just finished {n} game(s). Each self-gradient report contains feedback 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
 * When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it executes a potentially risky pattern, so it can verify the danger. Therefore, this field MUST describe the board state strictly prior to the agent's action. It cannot describe the action itself, otherwise it will fire too late. Describe the specific trigger condition. Maximum 4 sentences.
-* What: A specific move or plan the agent frequently executes in this situation (which could be a generally good move, but carries a hidden risk).
-* Flaw: The specific negative consequence or vulnerability that may be created by executing 'What'. Maximum 4 sentences.
-* Verification: The concrete check or calculation the agent must perform before executing 'What' to determine if the 'Flaw' will actually occur in the exact current position. Maximum 6 sentences.
+* What: A descriptive observation of the specific move or plan the agent frequently executes in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves.
+* Risk: The specific negative consequence or vulnerability that MAY happen IF the agent executes the 'What' behavior. It MUST describe a negative outcome (e.g., "The opponent will capture your piece", "You will lose the promotion race"). Maximum 4 sentences.
+* Verification: The concrete check or calculation the agent must perform before executing 'What' to determine if the 'Risk' will actually occur in the exact current position. Maximum 6 sentences.
 
 --- APPLICATION RULES ---
 Your role is Synthesizer. Update the Self-Reputation Database by applying the gradient report(s), BUT YOU MUST FIRST FILTER THEM THROUGH THE BATCH QUORUM RULES BELOW.
@@ -391,17 +391,17 @@ When the same signal receives conflicting instructions that meet their respectiv
 6. **[MODIFY] conflicts**: If modifying the same field with contradicting directions, take the union to cover both observations.
 
 --- SYNTHESIS QUALITY RULES ---
-- **Role-Agnostic Generalization**: If your own tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', 'Flaw', and 'Verification' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features. This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
+- **Role-Agnostic Generalization**: If your own tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', 'Risk', and 'Verification' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features. This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
 - **Preserve Specificity**: Do not strip concrete tactical details (specific trigger states, concrete safety checks) in favor of vague generalizations. It is better to have multiple highly-specific signals than 1 abstract signal.
-- **Brevity**: Each of When, What, and Flaw MUST be at most 4 sentences in the final database. The Verification MUST be at most 6 sentences. Distill by removing redundant phrasing — never by dropping distinct tactical conditions or concrete safety checks.
+- **Brevity**: Each of When, What, and Risk MUST be at most 4 sentences in the final database. The Verification MUST be at most 6 sentences. Distill by removing redundant phrasing — never by dropping distinct tactical conditions or concrete safety checks.
 - **NO AUTONOMOUS MERGING**: Do not merge or group signals unless explicitly commanded by a valid [MERGE] report that meets the quorum.
 
 You may output as many synthesized memory entries as needed. Each synthesized memory entry MUST use this format:
 
 - Signal: [Short Name of Pattern]
   - When: [Specific trigger condition — max 4 sentences]
-  - What: [Specific intended behavior — max 4 sentences]
-  - Flaw: [Specific negative consequence — max 4 sentences]
+  - What: [Descriptive observation of candidate move — max 4 sentences]
+  - Risk: [Specific negative consequence — max 4 sentences]
   - Verification: [Concrete check or calculation — max 6 sentences]
 
 Write ONLY the updated self-memory. Do not include any pleasantries or conversational filler.
@@ -480,7 +480,7 @@ A high-quality report captures BOTH types of signals:
 Analyze the game and propose updates using the following 5 tags:
 - [REMOVE]: Identify a signal whose core observed behavior (When/What) is directly contradicted by the ground truth, or whose signal is net harmful to retain. Do NOT use [REMOVE] if only the Policy is wrong; use [MODIFY] instead. Do NOT use [REMOVE] simply because a signal's trigger was not encountered this game.
 - [ADD]: Define a completely new self-pattern not yet covered by any signal. If an existing signal partially covers it, use [MODIFY] instead.
-- [MODIFY]: Identify an existing signal worth keeping but with inaccurate, misleading, too general, or too specific fields. Only list fields that are changing.
+- [MODIFY]: Identify an existing signal worth keeping but with inaccurate, misleading, or too specific fields. Only list fields that are changing.
 - [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior. Use [MERGE] conservatively: do NOT merge signals if unifying the policy would dilute their specific tactical responses. Prefer keeping highly specific, effective signals separate rather than creating one abstract signal. Two signals should only be merged if a single, unified policy is identical for both triggering situations and no tactical specificity is lost.
 - [KEEP]: Emit this tag when a self-signal's Policy was explicitly executed in this game AND doing so was causally beneficial to the agent winning. [KEEP] is a positive vouching action — emit it only when you are confident the Policy deserves credit for the outcome. Do NOT emit [KEEP] merely because the agent won; the signal's Policy must have been directly followed and must have contributed to the win. Do NOT emit [KEEP] if the game was a draw or a loss. Unmentioned signals carry no implication — [KEEP] is not a default; it is a deliberate endorsement.
   ⚠ [KEEP] protects only the Policy field of the named signal. You may still emit a concurrent [MODIFY] on the same signal's When or What fields if those fields need updating — [KEEP] will not block those changes. Only the Policy field is shielded.
