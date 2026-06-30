@@ -101,9 +101,13 @@ You may include as many update entries as necessary. A single gradient report ca
 
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
-⚠ PRE-ANALYSIS (complete both steps in your internal reasoning before writing any entries):
+⚠ PRE-ANALYSIS (complete all steps in your internal reasoning before writing any entries):
 1. AGENT SIGNAL AUDIT: Go through each window summary in the AGENT'S IN-GAME OBSERVATIONS above and extract: (a) which LTM signals the agent explicitly activated this game, (b) which Policy actions were actually executed as a result, and (c) what the board outcome was. These are the only link you have to how the reputation memory was used in-game, so analyze them carefully. If a signal's Policy was followed but the outcome was poor or neutral, prioritize a [MODIFY] on that signal's Policy so the agent does not repeat the same mistake. If the agent won and a signal's Policy was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
 2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Explicitly compare what the opponent communicated versus their physical moves to determine if they tend to bluff, negotiate honestly, or manipulate. If no chat is present, skip this step.
+3. SIGNAL SELF-REVIEW: For every signal you intend to report, draft it internally first and verify it against the exact static board state you extracted it from. Ask yourself:
+  - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static board state, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the board state alone, you MUST rewrite it to be highly descriptive and directly verifiable from the board state.
+  - For 'What': "Does the opponent actually do what is described?"
+  - For 'Policy': "Does the description accurately capture the opponent's threat or exploitable weakness, and would this Policy have successfully mitigated the threat or exploited the weakness in this exact board state?"
 
 
 Each entry in the gradient report MUST adhere to these structural rules:
@@ -308,9 +312,13 @@ You may include as many update entries as necessary. A single self-gradient repo
 
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
-⚠ PRE-ANALYSIS (complete both steps in your internal reasoning before writing any entries):
+⚠ PRE-ANALYSIS (complete all steps in your internal reasoning before writing any entries):
 1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the Verification check, (c) what the board outcome was. If a signal fired and the agent blindly executed the move and suffered the Risk, prioritize a [MODIFY] on that signal's Verification to make the check more explicit or forceful. If a signal fired and the agent successfully followed its Verification check, do NOT propose a new [ADD] for this success — rely on the existing signal to guide future play. If the agent won and a self-signal's Verification was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
 2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Evaluate whether the agent's chat strategy was effective or counterproductive. Note any self-patterns in how the agent used chat.
+3. SIGNAL SELF-REVIEW: For every signal you intend to report, draft it internally first and verify it against the exact static board state you extracted it from. Ask yourself:
+  - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static board state, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the board state alone, you MUST rewrite it to be highly descriptive and directly verifiable from the board state.
+  - For 'What': "Does the agent actually do what is described?"
+  - For 'Risk' and 'Verification': "Does the Risk highly describe the flaw/vulnerability, and would the Verification have actually prevented the flaw in this board state?"
 
 Each entry in the self-gradient report MUST adhere to these structural rules:
 
