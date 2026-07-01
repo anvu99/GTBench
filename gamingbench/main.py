@@ -63,8 +63,7 @@ def _get_memory_snapshot(agent):
         }
     elif hasattr(agent, 'ltm_store'):
         snap = {
-            'ltm': dict(agent.ltm_store.store),
-            'scores': {k: dict(v) for k, v in agent.ltm_store.scores.items()}
+            'ltm': dict(agent.ltm_store.store)
         }
         if hasattr(agent, 'self_ltm_store'):
             snap['self_ltm'] = dict(agent.self_ltm_store.store)
@@ -87,10 +86,8 @@ def _restore_memory_snapshot(clone, snapshot):
     if hasattr(clone, 'ltm_store'):
         if 'ltm' in snapshot:
             clone.ltm_store.store = dict(snapshot['ltm'])
-            clone.ltm_store.scores = {k: dict(v) for k, v in snapshot.get('scores', {}).items()}
         if hasattr(clone, 'self_ltm_store'):
             clone.self_ltm_store.store = dict(snapshot.get('self_ltm', {}))
-            clone.self_ltm_store.scores = {}
         clone.ltm_store_path = '/dev/null'
         clone.self_ltm_store_path = '/dev/null'
 

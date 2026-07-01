@@ -45,4 +45,6 @@ def run_self_tgd_synthesis(
 
     from gamingbench.utils.utils import strip_thinking_block
     generations, _, _ = model.query(messages, n=1, stop=None, prompt_type='move')
-    return strip_thinking_block(generations[0])
+    raw_generation = generations[0]
+    new_self_ltm = strip_thinking_block(raw_generation)
+    return new_self_ltm, raw_generation

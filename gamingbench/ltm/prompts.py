@@ -57,7 +57,7 @@ These are the agent's own observations and strategic thoughts recorded during th
 --- CURRENT LONG-TERM MEMORY (Prior) ---
 This is what the agent believed about this opponent BEFORE the game started.
 {current_ltm}
-("(No memory yet)" means this is the first game — treat all signals as ABSENT.)
+("(No memory yet)" means this is the first game)
 
 You are building a GRADIENT REPORT for the agent's Opponent Reputation Database.
 The goal of this report is to improve the agent's knowledge of this opponent so that in future games the agent can maximize its win rate. Each proposed update should bring the database closer to an accurate, complete, and strategically actionable understanding of the opponent — closing knowledge gaps that, if resolved, would unlock better strategies. A high-quality report captures BOTH types of signals: (1) Harm signals — opponent behaviors that damaged, deceived, or outmaneuvered the agent; and (2) Exploitable Weakness signals — patterns in the opponent's play that the agent successfully exploited, or that represented missed opportunities the agent should target in future games.
@@ -65,7 +65,7 @@ The goal of this report is to improve the agent's knowledge of this opponent so 
 
 --- LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
-* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE the opponent takes their turn. Therefore, this field MUST describe the board state strictly prior to the opponent's action. It cannot describe the opponent's action itself, otherwise it will fire too late. Describe everything that could plausibly have driven the opponent's decision: the situational history, established patterns, and any relevant observable signals present at the time. Do not infer triggers that were not directly observed. Maximum 4 sentences.
+* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE the opponent takes their turn. Therefore, this field MUST describe the static evidence (e.g., board state, chat log) strictly prior to the opponent's action. It cannot describe the opponent's action itself, otherwise it will fire too late. Describe everything that could plausibly have driven the opponent's decision based ONLY on the static evidence available at that moment. Do not infer triggers that were not directly observed. Maximum 4 sentences.
 * What: The factual observation of what the opponent did. Write only what was directly observed. Never use conditional language (e.g., "as long as", "whenever", "unless") — those imply rules that may not have been tested. If a condition was not tested, state that explicitly. Maximum 4 sentences.
 * Policy: The concrete action to execute. It is crucial that this policy is well-designed to be strictly actionable immediately when the 'When' condition fires. If there are different game states or edge cases where following this general policy would actively harm the agent (e.g., following a defensive rule during a winning race), you MUST explicitly list those exceptions and provide the alternative conditional policy for those specific cases. Maximum 6 sentences.
   - If all relevant opponent behavior has been observed: prescribe the optimal exploitation action directly.
@@ -81,6 +81,16 @@ Analyze the game and propose updates using the following 5 tags:
   ⚠ [KEEP] protects only the Policy field of the named signal. You may still emit a concurrent [MODIFY] on the same signal's When or What fields if those fields need updating — [KEEP] will not block those changes. Only the Policy field is shielded.
 
 You may include as many update entries as necessary. A single gradient report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, multiple [KEEP]s, etc., depending on what the game data supports.
+
+⚠ PRE-ANALYSIS (complete all steps in your internal reasoning before writing any entries):
+1. GAME HISTORY RECONSTRUCTION: Review the entire unified game context (board states, physical moves, chat logs, and window summaries) as a single chronological timeline. Identify key tactical situations, recurring behavioral patterns, or critical turning points where the opponent gained a distinct advantage, laid a trap, or exposed an exploitable weakness. To deeply understand their strategy, you should also step into the opponent's perspective: what overarching strategy do they actively follow to get an advantage for themselves (e.g., bluffing, rushing, turtling, setting up specific geometries)? This will give you high-quality information to understand the reputation and true intent behind the opponent's play style, which you can use to write a highly effective Policy to either mitigate or exploit their strategy.
+2. LTM SIGNAL AUDIT: For the patterns and situations identified above, audit the current database using the strict rules for [ADD], [MODIFY], [REMOVE], [MERGE], and [KEEP] defined later in this prompt. To perform this audit: (a) Check the window summaries in the AGENT'S IN-GAME OBSERVATIONS to see which existing LTM signals explicitly fired during those moments. (b) Evaluate how each fired signal was used in the game and determine how it should be included in your report (e.g., whether it needs to be modified, kept, or removed). (c) If a new threat or weakness emerged that no signal caught, first verify if an existing signal SHOULD have fired but was too narrow. If so, modify that existing signal. Only if no existing signal logically covers the behavior should you determine a new signal is warranted.
+3. SIGNAL SELF-REVIEW: For every signal you intend to report, draft it internally first and verify it against the exact static evidence (e.g., board state, current chat log) you extracted it from. Ask yourself:
+  - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static evidence, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the static evidence alone, you MUST rewrite it to be highly descriptive and directly verifiable from the static evidence.
+  - For 'What': "Does the opponent actually do what is described?"
+  - For 'Policy': "Does the description accurately capture the opponent's threat or exploitable weakness, and would this Policy have successfully mitigated the threat or exploited the weakness in this exact situation?"
+
+--- STRICT LTM RULES ---
 
 ⚠ OPPONENT-BEHAVIOR-ONLY RULE: Every signal you report — whether REMOVE, ADD, MODIFY, MERGE, or KEEP — MUST describe a behavioral pattern of the OPPONENT, not the agent's own strategy. Concretely: the When and What fields must be grounded in observable actions taken by the opponent during this game. 
 
@@ -100,14 +110,6 @@ You may include as many update entries as necessary. A single gradient report ca
 ⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If an opponent's tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role they are playing, you MUST write the 'When', 'What', and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features (e.g., "Row 2", "White side", "moving North"). This ensures the memory remains actionable if the roles are reversed in future games.
 
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
-
-⚠ PRE-ANALYSIS (complete all steps in your internal reasoning before writing any entries):
-1. AGENT SIGNAL AUDIT: Go through each window summary in the AGENT'S IN-GAME OBSERVATIONS above and extract: (a) which LTM signals the agent explicitly activated this game, (b) which Policy actions were actually executed as a result, and (c) what the board outcome was. These are the only link you have to how the reputation memory was used in-game, so analyze them carefully. If a signal's Policy was followed but the outcome was poor or neutral, prioritize a [MODIFY] on that signal's Policy so the agent does not repeat the same mistake. If the agent won and a signal's Policy was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
-2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Explicitly compare what the opponent communicated versus their physical moves to determine if they tend to bluff, negotiate honestly, or manipulate. If no chat is present, skip this step.
-3. SIGNAL SELF-REVIEW: For every signal you intend to report, draft it internally first and verify it against the exact static board state you extracted it from. Ask yourself:
-  - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static board state, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the board state alone, you MUST rewrite it to be highly descriptive and directly verifiable from the board state.
-  - For 'What': "Does the opponent actually do what is described?"
-  - For 'Policy': "Does the description accurately capture the opponent's threat or exploitable weakness, and would this Policy have successfully mitigated the threat or exploited the weakness in this exact board state?"
 
 
 Each entry in the gradient report MUST adhere to these structural rules:
@@ -144,23 +146,7 @@ Each entry in the gradient report MUST adhere to these structural rules:
 If no notable signals were observed, write: "No signals observed."
 Do NOT rewrite the current Long-Term Memory. Only produce the gradient report.
 
-After your gradient entries, output a second mandatory section with this exact heading:
 
-### Correctness Scores
-
-For each signal in the CURRENT LONG-TERM MEMORY that is being RETAINED (i.e., not [REMOVE]d and not a [MERGE] source signal), output exactly one line:
-  - Signal: <exact signal name from database> → <LABEL>
-
-Choose exactly one label per signal based strictly on the ground truth game history:
-  - CONFIRMED              : The signal's trigger (When) fired this game AND the opponent's behavior (What) matched exactly.
-  - MOSTLY_CONFIRMED       : The trigger fired AND behavior mostly matched, with only minor deviations.
-  - ABSENT                 : The trigger condition did not occur this game at all. Use this when the signal had no opportunity to fire.
-  - PARTIALLY_CONTRADICTED : The trigger fired BUT the opponent's behavior only partially matched the What description.
-  - CONTRADICTED           : The trigger fired AND the opponent's behavior clearly contradicted the What description.
-
-⚠ Do NOT include [REMOVE] signals, [MERGE] source signals, or newly [ADD]ed signals in this section.
-⚠ [ADD] and [MERGE] result signals are scored automatically by the system — do not list them here.
-⚠ If there are no retained existing signals to score, write: "No signals to score."
 """
 
 TGD_SYNTHESIS_PROMPT = """\
@@ -191,7 +177,7 @@ Your role is Synthesizer. Update the Opponent Reputation Database by applying th
 Note: each gradient entry includes a Reason field for your context. Use the Reason to better understand the intent and evidence behind an instruction, but do not copy Reason fields into the final database output.
 
 1. **[REMOVE] (if quorum met)**: Find the named signal in the current database. Delete it entirely.
-2. **[ADD] (if quorum met)**: Insert the new signal exactly as written in the gradient report. No changes.
+2. **[ADD] (if quorum met)**: If only one identical ADD is approved, insert it. If multiple similar ADDs are approved, synthesize them into a single unified signal using the best phrasing from the cluster.
 3. **[MODIFY] (if quorum met)**: Find the named signal. For each listed field, overwrite the `Old` value with the `New` value. Leave all other fields untouched.
 4. **[MERGE] (if quorum met)**: Remove both named signals. Insert the merged signal exactly as written.
 5. **[KEEP] (if quorum met)**: Record that the named signal's Policy was vouched for as causally beneficial in a winning game. The Policy field of this signal is protected — see reconciliation rules below for how to apply this when conflicts arise.
@@ -238,7 +224,7 @@ From your experience in previous games, you have accumulated the following knowl
 Each entry describes a behavioral pattern you have repeatedly exhibited across past games. The fields mean:
 - Signal: A short name for the recurring pattern in your own play.
 - When: The board state or situation that activates this signal. This is the SOLE criterion for determining whether a signal fires.
-- What: A specific move or plan you frequently consider or execute in this situation. Use this to recognize if your current candidate move falls into this potentially dangerous pattern.
+- What: A specific move or plan you have considered or executed in this situation in previous games. Use this to recognize if your current candidate move falls into this potentially dangerous pattern.
 - Risk: The specific negative outcome or vulnerability that MAY happen if you execute 'What'.
 - Verification: The specific check or calculation you must perform to determine if the 'Risk' will actually materialize in the exact current position.
 
@@ -268,16 +254,16 @@ Your goal is to compare the agent's in-game decisions against the GROUND TRUTH g
 
 --- CURRENT SELF-REPUTATION DATABASE (Prior) ---
 {current_self_ltm}
-("(No self-memory yet)" means this is the first game — treat all signals as ABSENT.)
+("(No self-memory yet)" means this is the first game)
 
 You are building a SELF-GRADIENT REPORT for the agent's Self-Reputation Database.
 The goal is to improve the agent's self-awareness so it can avoid recurring mistakes in future games.
-A high-quality report captures ONLY patterns that require strict verification — situations where the agent blindly executed a move without checking for a critical vulnerability, which led to a poor outcome. Do NOT record simple blunders that don't follow a pattern.
+A high-quality report captures structural vulnerabilities and strategic blind spots — situations where the agent executed a risky move without checking for a critical vulnerability. You MUST extract these vulnerabilities even if the agent ultimately won the game (e.g., near misses, unpunished mistakes, or systematic inefficiencies).
 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern in the agent's own play.
-* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it executes a potentially risky pattern, so it can verify the danger. Therefore, this field MUST describe the board state strictly prior to the agent's action. It cannot describe the action itself, otherwise it will fire too late. Describe only directly observable game state, not inferences about the opponent. Maximum 4 sentences.
-* What: A descriptive observation of the specific move or plan the agent frequently executes in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves. Maximum 4 sentences.
+* When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it executes a potentially risky pattern, so it can verify the danger. Therefore, this field MUST describe the static evidence (e.g., board state, chat log) strictly prior to the agent's action. It cannot describe the action itself, otherwise it will fire too late. Describe only directly observable static evidence, not inferences about the opponent. Maximum 4 sentences.
+* What: A descriptive observation of the specific move or plan the agent executed in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves. Maximum 4 sentences.
 * Risk: The specific negative consequence or vulnerability that MAY happen IF the agent executes the 'What' behavior. It MUST describe a negative outcome (e.g., "The opponent will capture your piece", "You will lose the promotion race"). Maximum 4 sentences.
 * Verification: The concrete check or calculation the agent must perform before executing 'What' to determine if the 'Risk' will actually occur in the exact current position. Maximum 6 sentences.
 
@@ -293,6 +279,16 @@ Analyze the game and propose updates using the following 5 tags:
 - [KEEP]: Emit this tag when a self-signal's Verification was explicitly executed in this game AND doing so was causally beneficial to the agent winning.
 
 You may include as many update entries as necessary. A single self-gradient report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, multiple [KEEP]s, etc., depending on what the game data supports.
+
+⚠ PRE-ANALYSIS (complete all steps in your internal reasoning before writing any entries):
+1. GAME HISTORY RECONSTRUCTION: Review the entire unified game context (board states, physical moves, chat logs, and window summaries) as a single chronological timeline. Identify key tactical situations, recurring behavioral patterns, or critical turning points where you (the agent) made a fatal flaw, fell for a trap, or executed a highly successful maneuver. To analyze your flaws, you should also step into the opponent's perspective: identify exactly what moves or strategies you executed that handed the opponent a mechanical advantage, created a vulnerability, or allowed them to bypass your strategy. You must do this regardless of whether you won or lost the game.
+2. LTM SIGNAL AUDIT: For the patterns and situations identified above, audit your existing LTM using the strict rules for [ADD], [MODIFY], [REMOVE], [MERGE], and [KEEP] defined later in this prompt. To perform this audit: (a) Check the window summaries in the AGENT'S IN-GAME OBSERVATIONS to see which self-LTM signals explicitly fired during those moments. (b) Evaluate how each fired signal was used in the game—specifically whether the Verification check was followed and if it succeeded or failed—and determine how it should be included in your report (e.g., whether it needs to be modified, kept, or removed). (c) If a critical blunder occurred that no signal caught, first verify if an existing signal SHOULD have fired but was too narrow. If so, modify that existing signal. Only if no existing signal logically covers the blunder should you determine a new signal is warranted.
+3. SIGNAL SELF-REVIEW: For every signal you intend to report, draft it internally first and verify it against the exact static evidence (e.g., board state, current chat log) you extracted it from. Ask yourself:
+  - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static evidence, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the static evidence alone, you MUST rewrite it to be highly descriptive and directly verifiable from the static evidence.
+  - For 'What': "Does the agent actually do what is described?"
+  - For 'Risk' and 'Verification': "Does the Risk highly describe the flaw/vulnerability, and would the Verification have actually prevented the flaw in this exact situation?"
+
+--- STRICT SELF-LTM RULES ---
 
 ⚠ AGENT-BEHAVIOR-ONLY RULE: Every signal you report MUST describe a pattern in the AGENT'S OWN play.
 ⚠ NAMING FORMAT RULE: Signal names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase.
@@ -310,15 +306,10 @@ You may include as many update entries as necessary. A single self-gradient repo
 
 ⚠ ANTI-DUPLICATION RULE: You are STRICTLY FORBIDDEN from using [ADD] if the core concept is already represented in the database. You MUST use [MODIFY] to extend the scope of the existing signal to cover the new edge case. [ADD] is reserved exclusively for fundamentally new behaviors that cannot be logically grouped with any existing signal.
 
-**CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
+⚠ ANTI-VAGUENESS RULE: The Verification MUST name a concrete check or calculation.
+⚠ BREVITY RULE: Each of When, What, and Risk MUST be at most 4 sentences. The Verification MUST be at most 6 sentences.
 
-⚠ PRE-ANALYSIS (complete all steps in your internal reasoning before writing any entries):
-1. SELF-SIGNAL AUDIT: Go through each window summary and extract: (a) which self-LTM signals fired this game, (b) whether the agent successfully followed the Verification check, (c) what the board outcome was. If a signal fired and the agent blindly executed the move and suffered the Risk, prioritize a [MODIFY] on that signal's Verification to make the check more explicit or forceful. If a signal fired and the agent successfully followed its Verification check, do NOT propose a new [ADD] for this success — rely on the existing signal to guide future play. If the agent won and a self-signal's Verification was directly executed and contributed to the win, consider emitting [KEEP] for that signal.
-2. CHAT ANALYSIS (only if a chat transcript is present in the game history): Evaluate whether the agent's chat strategy was effective or counterproductive. Note any self-patterns in how the agent used chat.
-3. SIGNAL SELF-REVIEW: For every signal you intend to report, draft it internally first and verify it against the exact static board state you extracted it from. Ask yourself:
-  - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static board state, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the board state alone, you MUST rewrite it to be highly descriptive and directly verifiable from the board state.
-  - For 'What': "Does the agent actually do what is described?"
-  - For 'Risk' and 'Verification': "Does the Risk highly describe the flaw/vulnerability, and would the Verification have actually prevented the flaw in this board state?"
+**CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
 Each entry in the self-gradient report MUST adhere to these structural rules:
 
@@ -349,8 +340,6 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
 - [KEEP] Signal: <exact name from database>
   - Reason: <reason>
 
-⚠ ANTI-VAGUENESS RULE: The Verification MUST name a concrete check or calculation.
-⚠ BREVITY RULE: Each of When, What, and Risk MUST be at most 4 sentences. The Verification MUST be at most 6 sentences.
 
 If no notable self-patterns were observed, write: "No signals observed."
 """
@@ -368,7 +357,7 @@ You have just finished {n} game(s). Each self-gradient report contains feedback 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
 * When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it executes a potentially risky pattern, so it can verify the danger. Therefore, this field MUST describe the board state strictly prior to the agent's action. It cannot describe the action itself, otherwise it will fire too late. Describe the specific trigger condition. Maximum 4 sentences.
-* What: A descriptive observation of the specific move or plan the agent frequently executes in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves.
+* What: A descriptive observation of the specific move or plan the agent executed in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves.
 * Risk: The specific negative consequence or vulnerability that MAY happen IF the agent executes the 'What' behavior. It MUST describe a negative outcome (e.g., "The opponent will capture your piece", "You will lose the promotion race"). Maximum 4 sentences.
 * Verification: The concrete check or calculation the agent must perform before executing 'What' to determine if the 'Risk' will actually occur in the exact current position. Maximum 6 sentences.
 
@@ -376,7 +365,7 @@ You have just finished {n} game(s). Each self-gradient report contains feedback 
 Your role is Synthesizer. Update the Self-Reputation Database by applying the gradient report(s), BUT YOU MUST FIRST FILTER THEM THROUGH THE BATCH QUORUM RULES BELOW.
 
 1. **[REMOVE] (if quorum met)**: Find the named signal. Delete it entirely.
-2. **[ADD] (if quorum met)**: Insert the new signal exactly as written. No changes.
+2. **[ADD] (if quorum met)**: If only one identical ADD is approved, insert it. If multiple similar ADDs are approved, synthesize them into a single unified signal using the best phrasing from the cluster.
 3. **[MODIFY] (if quorum met)**: Find the named signal. For each listed field, overwrite the `Old` value with the `New` value. Leave all other fields untouched.
 4. **[MERGE] (if quorum met)**: Remove both named signals. Insert the merged signal exactly as written.
 5. **[KEEP] (if quorum met)**: Record that the named signal's Verification was vouched for.
@@ -577,7 +566,7 @@ Your role is Synthesizer. Update the Self-Reputation Database by applying the gr
 Note: each gradient entry includes a Reason field for your context. Use the Reason to better understand the intent and evidence behind an instruction, but do not copy Reason fields into the final database output.
 
 1. **[REMOVE] (if quorum met)**: Find the named signal. Delete it entirely.
-2. **[ADD] (if quorum met)**: Insert the new signal exactly as written. No changes.
+2. **[ADD] (if quorum met)**: If only one identical ADD is approved, insert it. If multiple similar ADDs are approved, synthesize them into a single unified signal using the best phrasing from the cluster.
 3. **[MODIFY] (if quorum met)**: Find the named signal. For each listed field, overwrite the `Old` value with the `New` value. Leave all other fields untouched.
 4. **[MERGE] (if quorum met)**: Remove both named signals. Insert the merged signal exactly as written.
 5. **[KEEP] (if quorum met)**: Record that the named signal's Policy was vouched for as causally beneficial in a winning game. The Policy field of this signal is protected — see reconciliation rules below for how to apply this when conflicts arise.

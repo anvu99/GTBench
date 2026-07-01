@@ -12,8 +12,8 @@ def run_self_gradient_engine(
     """Runs the self-gradient engine to analyze the agent's own play patterns.
 
     Unlike the opponent gradient engine, this returns ONLY the structural report
-    (ADD/MODIFY/REMOVE/MERGE entries). There is no Correctness Scores section and
-    no EMA scoring — the gradient engine's explicit [REMOVE] tag is the sole
+    (ADD/MODIFY/REMOVE/MERGE entries). There is no EMA scoring — the gradient
+    engine's explicit [REMOVE] tag is the sole
     pruning mechanism for self-LTM signals.
 
     Returns:
@@ -33,4 +33,6 @@ def run_self_gradient_engine(
 
     from gamingbench.utils.utils import strip_thinking_block
     generations, _, _ = model.query(messages, n=1, stop=None, prompt_type='move')
-    return strip_thinking_block(generations[0])
+    raw_generation = generations[0]
+    structural_report = strip_thinking_block(raw_generation)
+    return structural_report, raw_generation
