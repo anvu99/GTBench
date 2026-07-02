@@ -89,6 +89,8 @@ You may include as many update entries as necessary. A single gradient report ca
   - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static evidence, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the static evidence alone, you MUST rewrite it to be highly descriptive and directly verifiable from the static evidence.
   - For 'What': "Does the opponent actually do what is described?"
   - For 'Policy': "Does the description accurately capture the opponent's threat or exploitable weakness, and would this Policy have successfully mitigated the threat or exploited the weakness in this exact situation?"
+4. SUCCESS PRESERVATION TEST (mandatory for every [MODIFY] proposal): For each signal you intend to [MODIFY], explicitly replay the situation(s) from this game where this signal's Policy was last executed correctly — i.e., where following it contributed to a win. Then ask: "Under my proposed new When/Policy text, would that same game still have been won?" You are STRICTLY FORBIDDEN from finalizing any [MODIFY] that: (a) tightens the 'When' trigger threshold so that it would no longer fire in a previously successful situation, (b) removes an allowed exception the agent previously needed to make a correct response, (c) adds a new abort or halt condition that would have prevented a previously winning action, or (d) replaces a working reactive strategy with a more restrictive one that would have caused inaction in a situation that required a response. If your proposed change fails this test, you MUST restructure it as an additive extension — append the new edge-case clause to the existing text rather than replacing the original.
+5. GRAVEYARD CROSS-VERIFICATION: Before writing any [ADD] or [MODIFY] signal, cross-reference it with the GRAVEYARD OF FAILED STRATEGIES (located at the bottom of the Current Long-Term Memory if it exists). Ensure you do not propose a policy that repeats a historically documented failure.
 
 --- STRICT LTM RULES ---
 
@@ -140,6 +142,11 @@ Each entry in the gradient report MUST adhere to these structural rules:
 - [KEEP] Signal: <exact name from database>
   - Reason: <one or two sentences explaining how this signal's Policy was executed this game and why it was causally beneficial to the agent's win>
 
+- [GRAVEYARD PROPOSAL]
+  - Description: <Concise description of the situation to act as a key for clustering (When the opponent is at [when], they attempt to do [what])>
+  - Policy Flaw: <Do NOT copy the full failed policy. Extract ONLY the specific part of the policy that actively harmed the agent's performance and explain why it backfired (which you are currently fixing via [MODIFY] or [REMOVE])>
+  (Use this ONLY when identifying an existing LTM policy that actively harmed the agent and caused a loss, to ensure it is never written again.)
+
 ⚠ ANTI-VAGUENESS RULE: The policy MUST name a concrete, executable action. 
 ⚠ BREVITY RULE: When and What MUST be at most 4 sentences. The Policy MUST be at most 6 sentences.
 
@@ -173,7 +180,16 @@ You have just finished {n} game(s). Each gradient report contains feedback tags 
   - The Policy MUST NOT assume untested opponent behavior when prescribing actions.
 
 --- APPLICATION RULES ---
-Your role is Synthesizer. Update the Opponent Reputation Database by applying the gradient report(s), BUT YOU MUST FIRST FILTER THEM THROUGH THE BATCH QUORUM RULES BELOW.
+Your role is Synthesizer. You MUST execute your task in a strict 2-step process.
+
+STEP 1: GRAVEYARD MANAGEMENT
+First, manage any [GRAVEYARD PROPOSAL] entries from the gradient reports.
+1. Cluster & Quorum: Group all conceptually identical [GRAVEYARD PROPOSAL]s from the reports. A cluster MUST contain at least 2 proposals to meet the quorum. Ignore any proposals that do not meet quorum.
+2. Consolidate: Merge the components of each valid cluster into a single Graveyard Proposal.
+3. Merge with Existing: Compare the consolidated proposal against the existing "--- GRAVEYARD OF FAILED STRATEGIES ---" (located at the bottom of the current database, if it exists). If an entry with the same underlying description exists, merge them by combining their Policy Flaw lists (ensuring no historical flaws are deleted). Otherwise, prepare to append it as a new entry.
+
+STEP 2: DATABASE SYNTHESIS & CROSS-VERIFICATION
+Second, update the main Opponent Reputation Database by applying the standard gradient report tags ([REMOVE], [ADD], [MODIFY], [MERGE], [KEEP]), BUT YOU MUST FIRST FILTER THEM THROUGH THE BATCH QUORUM RULES BELOW.
 Note: each gradient entry includes a Reason field for your context. Use the Reason to better understand the intent and evidence behind an instruction, but do not copy Reason fields into the final database output.
 
 1. **[REMOVE] (if quorum met)**: Find the named signal in the current database. Delete it entirely.
@@ -204,6 +220,7 @@ When the same signal receives conflicting instructions that meet their respectiv
 - **Preserve Specificity**: Do not strip concrete tactical details (specific trigger states, concrete actions) in favor of vague generalizations. It is better to have multiple highly-specific signals than 1 abstract signal.
 - **Brevity**: When and What MUST be at most 4 sentences in the final database. The Policy MUST be at most 6 sentences. Distill by removing redundant phrasing — never by dropping distinct tactical conditions.
 - **NO AUTONOMOUS MERGING**: Do not merge or group signals unless explicitly commanded by a valid [MERGE] report that meets the quorum.
+- **FINAL GUARDRAIL CROSS-VERIFICATION**: After synthesizing the main database, cross-verify it against your updated Graveyard. Ensure that absolutely no policies present in the Graveyard have accidentally slipped into the final synthesized database.
 
 Each synthesized memory entry MUST use this format:
 
@@ -212,7 +229,13 @@ Each synthesized memory entry MUST use this format:
   - What: [Specific behavior observation — max 4 sentences]
   - Policy: [Concrete executable action — max 6 sentences]
 
-Write ONLY the updated memory. Do not include any pleasantries or conversational filler.
+You MUST output the full Graveyard section at the very bottom of your output (carrying over all existing entries and appending any new ones). If no graveyard exists and none was created, you may omit this section:
+
+--- GRAVEYARD OF FAILED STRATEGIES ---
+- Description: [Concise description of the situation]
+  - Policy Flaw: [The specific part of the policy that actively harmed the agent and why it backfired]
+
+Write ONLY the full updated memory and graveyard. Do not include any pleasantries or conversational filler.
 If no memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.
 """
 
@@ -258,7 +281,7 @@ Your goal is to compare the agent's in-game decisions against the GROUND TRUTH g
 
 You are building a SELF-GRADIENT REPORT for the agent's Self-Reputation Database.
 The goal is to improve the agent's self-awareness so it can avoid recurring mistakes in future games.
-A high-quality report captures structural vulnerabilities and strategic blind spots — situations where the agent executed a risky move without checking for a critical vulnerability. You MUST extract these vulnerabilities even if the agent ultimately won the game (e.g., near misses, unpunished mistakes, or systematic inefficiencies).
+A high-quality report captures ONLY patterns that require strict verification — situations where the agent blindly executed a move without checking for a critical vulnerability, which led to a poor outcome. Do NOT record simple blunders that don't follow a pattern, unless it is a highly critical or fatal strategic blunder that could single-handedly lose the game.
 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern in the agent's own play.
@@ -287,6 +310,8 @@ You may include as many update entries as necessary. A single self-gradient repo
   - For 'When': "If the playing agent reads this exact text and looks ONLY at this specific static evidence, would this signal definitively fire?" If your drafted text relies on past transitions (e.g., "just moved"), hidden intentions, or vague subjective words that the playing agent cannot strictly verify from the static evidence alone, you MUST rewrite it to be highly descriptive and directly verifiable from the static evidence.
   - For 'What': "Does the agent actually do what is described?"
   - For 'Risk' and 'Verification': "Does the Risk highly describe the flaw/vulnerability, and would the Verification have actually prevented the flaw in this exact situation?"
+4. SUCCESS PRESERVATION TEST (mandatory for every [MODIFY] proposal): For each signal you intend to [MODIFY], explicitly replay the situation(s) from this game where this signal last fired correctly — i.e., where its Verification prevented a bad move, or its When trigger fired and contributed to a win. Then ask: "Under my proposed new When/Verification text, would that same situation still produce the same correct outcome?" You are STRICTLY FORBIDDEN from finalizing any [MODIFY] that: (a) tightens the 'When' trigger threshold so that it would no longer fire in a previously successful situation, (b) removes or narrows an allowed exception in the 'Verification' that the agent previously needed to make a correct move, (c) adds a new halt condition that would have blocked a move that previously led to a win, or (d) replaces a working verification check with a stricter one that would have blocked a move that previously led to a win. If your proposed change fails this test, you MUST restructure it as an additive extension — append the new edge-case clause to the existing text rather than replacing it.
+5. GRAVEYARD CROSS-VERIFICATION: Before writing any [ADD] or [MODIFY] signal, cross-reference it with the GRAVEYARD OF FAILED STRATEGIES (located at the bottom of the Current Self-Reputation Database if it exists). Ensure you do not propose a verification rule that repeats a historically documented failure.
 
 --- STRICT SELF-LTM RULES ---
 
@@ -340,6 +365,11 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
 - [KEEP] Signal: <exact name from database>
   - Reason: <reason>
 
+- [GRAVEYARD PROPOSAL]
+  - Description: <Concise description of the situation to act as a key for clustering (When we are at [when], we consider doing [what] and risk [risk])>
+  - Verification Flaw: <Do NOT copy the full failed verification. Extract ONLY the specific part of the verification rule that actively paralyzed or harmed the agent's performance and explain why it backfired (which you are currently fixing via [MODIFY] or [REMOVE])>
+  (Use this ONLY when identifying an existing Self-LTM verification rule that actively harmed the agent and caused a loss, to ensure it is never written again.)
+
 
 If no notable self-patterns were observed, write: "No signals observed."
 """
@@ -362,7 +392,16 @@ You have just finished {n} game(s). Each self-gradient report contains feedback 
 * Verification: The concrete check or calculation the agent must perform before executing 'What' to determine if the 'Risk' will actually occur in the exact current position. Maximum 6 sentences.
 
 --- APPLICATION RULES ---
-Your role is Synthesizer. Update the Self-Reputation Database by applying the gradient report(s), BUT YOU MUST FIRST FILTER THEM THROUGH THE BATCH QUORUM RULES BELOW.
+Your role is Synthesizer. You MUST execute your task in a strict 2-step process.
+
+STEP 1: GRAVEYARD MANAGEMENT
+First, manage any [GRAVEYARD PROPOSAL] entries from the self-gradient reports.
+1. Cluster & Quorum: Group all conceptually identical [GRAVEYARD PROPOSAL]s from the reports. A cluster MUST contain at least 2 proposals to meet the quorum. Ignore any proposals that do not meet quorum.
+2. Consolidate: Merge the components of each valid cluster into a single Graveyard Proposal.
+3. Merge with Existing: Compare the consolidated proposal against the existing "--- GRAVEYARD OF FAILED STRATEGIES ---" (located at the bottom of the current self-database, if it exists). If an entry with the same underlying description exists, merge them by combining their Verification Flaw lists (ensuring no historical flaws are deleted). Otherwise, prepare to append it as a new entry.
+
+STEP 2: DATABASE SYNTHESIS & CROSS-VERIFICATION
+Second, update the main Self-Reputation Database by applying the standard self-gradient report tags ([REMOVE], [ADD], [MODIFY], [MERGE], [KEEP]), BUT YOU MUST FIRST FILTER THEM THROUGH THE BATCH QUORUM RULES BELOW.
 
 1. **[REMOVE] (if quorum met)**: Find the named signal. Delete it entirely.
 2. **[ADD] (if quorum met)**: If only one identical ADD is approved, insert it. If multiple similar ADDs are approved, synthesize them into a single unified signal using the best phrasing from the cluster.
@@ -392,6 +431,7 @@ When the same signal receives conflicting instructions that meet their respectiv
 - **Preserve Specificity**: Do not strip concrete tactical details (specific trigger states, concrete safety checks) in favor of vague generalizations. It is better to have multiple highly-specific signals than 1 abstract signal.
 - **Brevity**: Each of When, What, and Risk MUST be at most 4 sentences in the final database. The Verification MUST be at most 6 sentences. Distill by removing redundant phrasing — never by dropping distinct tactical conditions or concrete safety checks.
 - **NO AUTONOMOUS MERGING**: Do not merge or group signals unless explicitly commanded by a valid [MERGE] report that meets the quorum.
+- **FINAL GUARDRAIL CROSS-VERIFICATION**: After synthesizing the main database, cross-verify it against your updated Graveyard. Ensure that absolutely no verification rules present in the Graveyard have accidentally slipped into the final synthesized database.
 
 You may output as many synthesized memory entries as needed. Each synthesized memory entry MUST use this format:
 
@@ -401,7 +441,13 @@ You may output as many synthesized memory entries as needed. Each synthesized me
   - Risk: [Specific negative consequence — max 4 sentences]
   - Verification: [Concrete check or calculation — max 6 sentences]
 
-Write ONLY the updated self-memory. Do not include any pleasantries or conversational filler.
+You MUST output the full Graveyard section at the very bottom of your output (carrying over all existing entries and appending any new ones). If no graveyard exists and none was created, you may omit this section:
+
+--- GRAVEYARD OF FAILED STRATEGIES ---
+- Description: [Concise description of the situation]
+  - Verification Flaw: [The specific part of the verification rule that actively harmed the agent and why it backfired]
+
+Write ONLY the full updated self-memory and graveyard. Do not include any pleasantries or conversational filler.
 If no self-memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.
 """
 
