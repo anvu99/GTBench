@@ -55,7 +55,12 @@ class Negotiation(OpenSpielGame):
         most_recent_utterance_match = re.search(
             r'Most recent utterance: (.+)', self.env.observation_string())
 
+        opp_proposal = most_recent_proposal_match.group(1) if most_recent_proposal_match else "None"
+        opp_utterance = most_recent_utterance_match.group(1) if most_recent_utterance_match else "None"
+        board_str = f"Pool: {item_pool}, Your values: {agent_util_vec}, Stage: {turn_type}, Opponent Proposal: {opp_proposal}, Opponent Utterance: {opp_utterance}"
+
         res = {
+            'board': board_str,
             'opponent_moves': self.quick_action_memory_for_llm.get(opponent_idx, []),
             'self_moves': self.quick_action_memory_for_llm.get(current_player_idx, []),
             'turn_type': turn_type,

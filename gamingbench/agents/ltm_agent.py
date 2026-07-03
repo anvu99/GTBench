@@ -95,9 +95,10 @@ class LTMAgent(PromptAgent):
             current_ltm = self.ltm_store.get(self.current_opponent_key)
             
         if current_ltm:
+            active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             ltm_injection = LTM_INJECTION_PROMPT.format(
                 opponent_id="the opponent",
-                ltm_text=current_ltm
+                ltm_text=active_ltm
             )
             # Inject LTM right after the game intro in the user prompt
             from gamingbench.prompts.observation_prompts import construct_game_intro
@@ -107,14 +108,19 @@ class LTMAgent(PromptAgent):
 
         current_self_ltm = self.self_ltm_store.get("__self__")
         if current_self_ltm:
+            active_self_ltm = current_self_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             self_ltm_injection = SELF_LTM_INJECTION_PROMPT.format(
-                self_ltm_text=current_self_ltm
+                self_ltm_text=active_self_ltm
             )
             from gamingbench.prompts.observation_prompts import construct_game_intro
             env_name = observations['env_name']
             game_intro = construct_game_intro(env_name)
             # Inject self-LTM after the opponent LTM (or after game intro if no opponent LTM)
-            inject_after = (LTM_INJECTION_PROMPT.format(opponent_id="the opponent", ltm_text=current_ltm) if current_ltm else game_intro)
+            if current_ltm:
+                active_opp_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+                inject_after = LTM_INJECTION_PROMPT.format(opponent_id="the opponent", ltm_text=active_opp_ltm)
+            else:
+                inject_after = game_intro
             observation_prompt = observation_prompt.replace(inject_after, inject_after + "\n\n" + self_ltm_injection, 1)
             
         return system_prompt, observation_prompt
@@ -245,16 +251,18 @@ Your action wrapped by <>, i.e., {fmt}
         user_prompt_parts = [game_intro]
         
         if current_ltm:
+            active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             ltm_injection = LTM_INJECTION_PROMPT.format(
                 opponent_id="the opponent",
-                ltm_text=current_ltm
+                ltm_text=active_ltm
             )
             user_prompt_parts.append(ltm_injection)
 
         current_self_ltm = self.self_ltm_store.get("__self__")
         if current_self_ltm:
+            active_self_ltm = current_self_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             self_ltm_injection = SELF_LTM_INJECTION_PROMPT.format(
-                self_ltm_text=current_self_ltm
+                self_ltm_text=active_self_ltm
             )
             user_prompt_parts.append(self_ltm_injection)
             
@@ -313,16 +321,18 @@ Your action wrapped by <>, i.e., {fmt}
         user_prompt_parts = [game_intro]
         
         if current_ltm:
+            active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             ltm_injection = LTM_INJECTION_PROMPT.format(
                 opponent_id="the opponent",
-                ltm_text=current_ltm
+                ltm_text=active_ltm
             )
             user_prompt_parts.append(ltm_injection)
 
         current_self_ltm = self.self_ltm_store.get("__self__")
         if current_self_ltm:
+            active_self_ltm = current_self_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             self_ltm_injection = SELF_LTM_INJECTION_PROMPT.format(
-                self_ltm_text=current_self_ltm
+                self_ltm_text=active_self_ltm
             )
             user_prompt_parts.append(self_ltm_injection)
             
@@ -539,8 +549,18 @@ Your action wrapped by <>, i.e., {fmt}
 
         n = len(gradient_data)
         # Support legacy 2-tuple format (pre-self-LTM batches) gracefully
-        opp_data = [d["opp"] if isinstance(d, dict) else d for d in gradient_data]
-        self_reports = [d["self"] for d in gradient_data if isinstance(d, dict) and "self" in d]
+        opp_data = []
+        self_reports = []
+        for d in gradient_data:
+            if isinstance(d, dict):
+                if "opp" in d:
+                    opp_data.append(d["opp"])
+                if "self" in d:
+                    self_structural_report, _ = d["self"]
+                    self_reports.append(self_structural_report)
+            else:
+                # Legacy format: d is a tuple (structural_report, raw_grad_gen)
+                opp_data.append(d)
 
         structural_reports = [r for r, _ in opp_data]
 

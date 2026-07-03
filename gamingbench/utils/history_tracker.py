@@ -5,7 +5,7 @@ from collections import defaultdict
 class Query:
     def __init__(self, messages: list, prompt_type: str, llm_output: list, token_size: int = 0) -> None:
 
-        assert prompt_type in ['move', 'plan', 'vote']
+        assert prompt_type in ['move', 'plan', 'vote', 'critique']
         self.messages = messages
         self.prompt_type = prompt_type
         self.llm_output = llm_output

@@ -16,8 +16,10 @@ class FirstSealedAuction(OpenSpielGame):
         return agent_action_list
 
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
+        val = self.env.observation_string()
         return {
-            'valuation': float(self.env.observation_string())
+            'board': f"Your private valuation: {val}",
+            'valuation': float(val)
         }
 
     def agent_action_to_openspiel(self, action):

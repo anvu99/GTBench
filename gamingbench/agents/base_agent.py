@@ -29,7 +29,7 @@ class BaseAgent(object):
     def llm_query(self, messages, n, stop, prompt_type, **kwargs):
         if self.model == None:
             raise NotImplementedError
-        assert prompt_type in ['move', 'plan', 'vote']
+        assert prompt_type in ['move', 'plan', 'vote', 'critique']
         generations, completion_tokens, prompt_tokens = self.model.query(
             messages, n, stop, prompt_type, **kwargs)
         query = self._prompt_to_query(

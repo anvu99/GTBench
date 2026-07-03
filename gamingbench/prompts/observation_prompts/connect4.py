@@ -1,8 +1,9 @@
 
 
 def _construct_head_prompt():
-    return """Connect 4 is a two-player connection board game, where the players choose a color and then take turns dropping colored discs into a vertically suspended grid. The pieces fall straight down, occupying the next available space within the column. The objective of the game is to be the first to form a horizontal, vertical, or diagonal line of four of one's own discs. You are a gaming agent that aims to beat me in Connect 4 games. 
-    Each move is represented by a string consisting of two parts: the column (C) and the row (R), in that order. For instance, C1 means the first column."""
+    return """Connect 4 is a two-player connection board game, played on a 6x7 vertical grid. Players take turns dropping colored discs into one of the 7 columns. The pieces fall straight down, occupying the lowest available row index in that column. The objective of the game is to be the first to form a horizontal, vertical, or diagonal line of four of one's own discs. You are a gaming agent that aims to beat the opponent in Connect 4 games.
+    The columns are labeled C1 to C7 from left to right. The rows are numbered R1 (bottom) to R6 (top).
+    You only choose the column to drop your piece into. Each move must be formatted as <Cx> where x is the column number (1 to 7). For example, <C4> drops a piece into column 4, which will automatically fall to the lowest empty row in column 4."""
 
 def construct_observation_prompt(observations):
 
@@ -44,4 +45,4 @@ def construct_observation_prompt(observations):
 def _construct_game_history_legend():
     return """- [Player Context]: States which piece ("x" or "o") "You" and "Opponent" correspond to.
 - [Position Legend]: Explains how to read the [Position] lines.
-- [Position]: The board layout at the moment that player had to make their decision (before the move was executed). The board is a 6x7 grid. 'x' and 'o' represent the players' pieces, '.'=empty."""
+- [Position]: The board layout at the moment that player had to make their decision (before the move was executed). The board is a 6x7 grid with cells labeled from C1R1 to C7R6, where rows are 1 (bottom) to 6 (top) and columns are 1 (left) to 7 (right). 'x' and 'o' represent the players' pieces, '.'=empty."""

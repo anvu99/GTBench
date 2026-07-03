@@ -18,8 +18,23 @@ class ConnectFour(OpenSpielGame):
 
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
         opponent_idx = 1 if current_player_idx == 0 else 0
+        lines = openspiel_obs.strip().split('\n')
+        formatted_rows = []
+        for r_idx, line in enumerate(lines):
+            row_num = 6 - r_idx
+            row_parts = []
+            for c_idx, char in enumerate(line.strip()):
+                col_num = c_idx + 1
+                row_parts.append(f"C{col_num}R{row_num}={char}")
+            row_label = f"Row {row_num}"
+            if row_num == 6:
+                row_label += " (top)"
+            elif row_num == 1:
+                row_label += " (bottom)"
+            formatted_rows.append(f"{row_label}: " + ", ".join(row_parts))
+        board_preview = "\n".join(formatted_rows)
         res = {
-            'board': openspiel_obs,
+            'board': board_preview,
             'opponent_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(opponent_idx, [])),
             'self_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(current_player_idx, [])),
             'player_idx': current_player_idx,

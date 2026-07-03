@@ -1,0 +1,11 @@
+agent_name: ExpelCotAgent
+agent_type: ExpelCotAgent
+num_generations: 1
+majority_vote: False
+enable_chat: False
+
+# ExpeL Memory Configurations
+rules_store_path: "expel_rules.json"
+experience_pool_path: "expel_experience.json"
+num_fewshots: 2
+max_num_rules: 15

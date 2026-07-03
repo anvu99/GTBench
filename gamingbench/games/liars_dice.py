@@ -37,6 +37,7 @@ class LiarsDice(OpenSpielGame):
         obs = openspiel_obs.split(' ')
 
         res = {
+            'board': f"Your die: {obs[current_player_idx]}",
             'opponent_moves': self.quick_action_memory_for_llm.get(opponent_idx, []),
             'self_moves': self.quick_action_memory_for_llm.get(current_player_idx, []),
             'self_dice_face_value': obs[current_player_idx],

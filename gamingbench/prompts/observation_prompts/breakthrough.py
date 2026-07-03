@@ -1,7 +1,9 @@
 
 
 def _construct_head_prompt():
-    return """Breakthrough is a two-player game played on a rectangular board. Players take turns moving their pieces, which can move one space straight or diagonally forward if the target square is empty. A piece can also move diagonally forward to capture an opponent's piece. Capturing is optional, and a player can only capture one piece per turn. The goal is to be the first to reach the opponent's home row, the farthest row from the player. If all of a player's pieces are captured, they lose. The game does not allow draws, as pieces can only move forward or be captured.The Breakthrough board is a 8x3 grid. It is identified by 3 columns labeled 'a', 'b', 'c' (from left to right) and 8 rows numbered 1 to 8 (from bottom to top). The intersection of a column and a row specifies a unique square on the board."""
+    return """Breakthrough is a two-player game played on a rectangular board. Players take turns moving their pieces, which can move one space straight or diagonally forward if the target square is empty. A piece can only move diagonally forward to capture an opponent's piece (capturing straight forward is not allowed). Capturing is optional, and a player can only capture one piece per turn. The goal is to be the first to reach the opponent's home row, the farthest row from the player. If all of a player's pieces are captured, they lose. The game does not allow draws, as pieces can only move forward or be captured.The Breakthrough board is a 8x3 grid. It is identified by 3 columns labeled 'a', 'b', 'c' (from left to right) and 8 rows numbered 1 to 8 (from bottom to top). The intersection of a column and a row specifies a unique square on the board."""
+
+
 
 
 def construct_observation_prompt(observations):

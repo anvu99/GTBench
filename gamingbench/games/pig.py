@@ -29,12 +29,18 @@ class Pig(OpenSpielGame):
         # Extract the first three numbers
         num1, num2, num3 = map(int, numbers[:3])
 
+        self_score = num2 if current_player_idx == 1 else num1
+        opp_score = num2 if current_player_idx == 0 else num1
+        turn_total = num3
+        board_str = f"Your score: {self_score}, Opponent score: {opp_score}, Turn total: {turn_total}"
+
         res = {
+            'board': board_str,
             # 'opponent_moves': self.quick_action_memory_for_llm.get(opponent_idx, []),
             # 'self_moves': self.quick_action_memory_for_llm.get(current_player_idx, []),
-            'self_current_score': num2 if current_player_idx == 1 else num1,
-            'opponent_current_score': num2 if current_player_idx == 0 else num1,
-            'turn_total_score': num3,
+            'self_current_score': self_score,
+            'opponent_current_score': opp_score,
+            'turn_total_score': turn_total,
 
         }
         return res

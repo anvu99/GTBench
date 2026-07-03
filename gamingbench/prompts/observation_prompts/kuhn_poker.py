@@ -1,10 +1,9 @@
-
 def _construct_head_prompt():
-    return 'Kuhn poker is a simple model zero-sum two-player imperfect-information game, amenable to a complete game-theoretic analysis. In Kuhn poker, the deck includes only three playing cards: a King (K), a Queen (Q), and a Jack (J).\n' \
-           'One card is dealt to each player, and the third is put aside unseen. The players take turns either <Bet> to match the bet raised by the opponent or <Pas> to conceds the game.\n' \
-           'If a player bets, the other player must either call the bet by matching it or fold by conceding the game. If both players pass, the game is over, and the player with the higher-ranking card wins. The card rankings are as follows: King (K) > Queen (Q) > Jack (J).\n' \
+    return 'Kuhn poker is a simple zero-sum two-player imperfect-information game, amenable to a complete game-theoretic analysis. In Kuhn poker, the deck includes only three playing cards: a King (K), a Queen (Q), and a Jack (J).\n' \
+           'One card is dealt to each player, and the third is put aside unseen. The players take turns either to <Bet> or <Pass>.\n' \
+           'If a player bets, the other player must either call the bet by betting or fold by passing. If both players pass, the game is over, and the player with the higher-ranking card wins. The card rankings are: King (K) > Queen (Q) > Jack (J).\n' \
            '\n' \
-           'You are playing Kuhn poker with the opponent. The actions are denoted by <Bet> and <Pass>.' \
+           'You are playing Kuhn poker with the opponent. The actions are denoted by <Bet> and <Pass>.'
 
 
 
@@ -25,10 +24,8 @@ def construct_observation_prompt(observations):
         move_prompt = 'Here are the past moves in this match:\n'
 
         for idx, m in enumerate(moves):
-            if (player_idx + 1) % (idx + 1) == 0:
-                role = 'you'
-            else:
-                role = 'the opponent'
+            action_player_idx = 0 if idx % 2 == 0 else 1
+            role = 'you' if action_player_idx == player_idx else 'the opponent'
 
             if m == 'b':
                 move = '<Bet>'

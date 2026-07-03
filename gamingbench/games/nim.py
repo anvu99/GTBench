@@ -22,6 +22,7 @@ class Nim(OpenSpielGame):
         numbers = openspiel_obs.split(' ')
         numbers = numbers[1:]
         res = {
+            'board': f"Pile 1: {numbers[0]}, Pile 2: {numbers[1]}, Pile 3: {numbers[2]}, Pile 4: {numbers[3]}",
             'opponent_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(opponent_idx, [])),
             'self_moves': copy.deepcopy(self.quick_action_memory_for_llm.get(current_player_idx, [])),
             'piles': numbers

@@ -296,7 +296,7 @@ class VLLMModel(BaseModel):
         in a single continuous-batching window.  Empty-output retries fall back
         to individual sequential requests as before.
         """
-        assert prompt_type in ['move', 'plan', 'vote']
+        assert prompt_type in ['move', 'plan', 'vote', 'critique']
         
         enable_thinking = kwargs.get('enable_thinking', None)
         prompt = self._format_messages(messages, enable_thinking=enable_thinking)

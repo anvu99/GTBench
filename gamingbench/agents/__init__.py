@@ -12,6 +12,8 @@ from gamingbench.agents.episodic_window_agent import EpisodicWindowAgent
 from gamingbench.agents.episodic_window_cot_agent import EpisodicWindowCotAgent
 
 from gamingbench.agents.ltm_cot_agent import LTMCotAgent
+from gamingbench.agents.expel_agent import ExpelAgent
+from gamingbench.agents.expel_cot_agent import ExpelCotAgent
 
 __all__ = [
     "PromptAgent",
@@ -26,5 +28,7 @@ __all__ = [
     "SlidingWindowCotAgent",
     "LTMCotAgent",
     "EpisodicWindowAgent",
-    "EpisodicWindowCotAgent"
+    "EpisodicWindowCotAgent",
+    "ExpelAgent",
+    "ExpelCotAgent"
 ]

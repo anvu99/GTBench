@@ -2,7 +2,8 @@
 
 def _construct_head_prompt():
     return """Tic Tac Toe is a two-player game played on a grid. Players take turns marking a space with their respective symbols. The goal is to get 3 of one\'s own symbols in a row, either horizontally, vertically, or diagonally, before the opponent does. If all nine squares are filled and no player has three in a row, the game is a draw. The Tic Tac Toe game is played on a 3 by 3 grid, with the winning length as 3.
-Each move is represented by a string consisting of two parts: the column (C) and the row (R), in that order. For instance, C1R2 means the movement at the position of the first column and the second row of the grid. You are playing this game with the user (opponent)."""
+Each cell is identified by a column (C1 to C3, from left to right) and a row (R1 to R3, from top to bottom). Row 1 is the top row, and Row 3 is the bottom row.
+Each move is represented by a string consisting of two parts: the column (C) and the row (R), in that order. For instance, <C1R2> means placing a mark at the first column and the second row of the grid. You are playing this game with the user (opponent)."""
 
 def construct_observation_prompt(observations):
     """
@@ -51,4 +52,4 @@ def construct_observation_prompt(observations):
 def _construct_game_history_legend():
     return """- [Player Context]: States which symbol ("x" or "o") "You" and "Opponent" correspond to.
 - [Position Legend]: Explains how to read the [Position] lines.
-- [Position]: The board layout at the moment that player had to make their decision (before the move was executed). The board is a 3x3 grid. 'x'=Cross, 'o'=Nought, '.'=empty."""
+- [Position]: The board layout at the moment that player had to make their decision (before the move was executed). The board is a 3x3 grid with cells labeled from C1R1 to C3R3, where rows are 1 (top) to 3 (bottom) and columns are 1 (left) to 3 (right). 'x'=Cross, 'o'=Nought, '.'=empty."""
