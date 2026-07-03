@@ -181,7 +181,7 @@ class ExpelAgent(PromptAgent):
         if not docs:
             return None
         
-        embedder = HuggingFaceEmbeddings(model_name="all-mpnet-base-v2")
+        embedder = HuggingFaceEmbeddings(model_name="all-mpnet-base-v2", model_kwargs={"device": "cpu"})
         return FAISS.from_documents(docs, embedder)
 
     def reset_game_state(self, opponent_name, game_intro):
