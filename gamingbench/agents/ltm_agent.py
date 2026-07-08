@@ -103,7 +103,7 @@ class LTMAgent(PromptAgent):
             # Inject LTM right after the game intro in the user prompt
             from gamingbench.prompts.observation_prompts import construct_game_intro
             env_name = observations['env_name']
-            game_intro = construct_game_intro(env_name)
+            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
             observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + ltm_injection, 1)
 
         current_self_ltm = self.self_ltm_store.get("__self__")
@@ -114,7 +114,7 @@ class LTMAgent(PromptAgent):
             )
             from gamingbench.prompts.observation_prompts import construct_game_intro
             env_name = observations['env_name']
-            game_intro = construct_game_intro(env_name)
+            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
             # Inject self-LTM after the opponent LTM (or after game intro if no opponent LTM)
             if current_ltm:
                 active_opp_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
@@ -245,7 +245,7 @@ Your action wrapped by <>, i.e., {fmt}
         env_name = observations.get('env_name', 'unknown')
         chat_context = observations.get('chat_context', '')
         
-        sys_content = construct_system_prompt(env_name) if env_name != 'unknown' else "You are a powerful gaming agent who can make proper decisions to beat the user in gaming tasks. You are a helpful assistant that strictly follows the user's instructions. You must answer your questions by choosing one of the legal moves given by the user!"
+        sys_content = construct_system_prompt(env_name) if env_name != 'unknown' else "You are a powerful gaming agent who can make proper decisions to achieve your objective (either defeating the opponent or coordinating successfully with your partner) in gaming tasks. You are a helpful assistant that strictly follows the user's instructions. You must answer your questions by choosing one of the legal moves given by the user!"
         
         game_intro = self.current_game_intro or "Game rules unavailable."
         user_prompt_parts = [game_intro]
@@ -315,7 +315,7 @@ Your action wrapped by <>, i.e., {fmt}
         self.logger.info('-' * 20 + f'{self.agent_name} Final Summarization' + '-' * 20)
         current_ltm = self.ltm_store.get(self.current_opponent_key) if self.current_opponent_key else None
         
-        sys_content = construct_system_prompt(env_name) if env_name != 'unknown' else "You are a powerful gaming agent who can make proper decisions to beat the user in gaming tasks. You are a helpful assistant that strictly follows the user's instructions. You must answer your questions by choosing one of the legal moves given by the user!"
+        sys_content = construct_system_prompt(env_name) if env_name != 'unknown' else "You are a powerful gaming agent who can make proper decisions to achieve your objective (either defeating the opponent or coordinating successfully with your partner) in gaming tasks. You are a helpful assistant that strictly follows the user's instructions. You must answer your questions by choosing one of the legal moves given by the user!"
         
         game_intro = self.current_game_intro or "Game rules unavailable."
         user_prompt_parts = [game_intro]

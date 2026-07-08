@@ -3,6 +3,12 @@ def _construct_head_prompt():
            'One card is dealt to each player, and the third is put aside unseen. The players take turns either to <Bet> or <Pass>.\n' \
            'If a player bets, the other player must either call the bet by betting or fold by passing. If both players pass, the game is over, and the player with the higher-ranking card wins. The card rankings are: King (K) > Queen (Q) > Jack (J).\n' \
            '\n' \
+           'Payoffs (Chips):\n' \
+           '- If a player folds, they lose 1 chip and the opponent wins 1 chip.\n' \
+           '- If both players pass, it goes to a showdown. The player with the higher card wins 1 chip, and the loser loses 1 chip.\n' \
+           '- If a player bets and the other calls, it goes to a showdown. The player with the higher card wins 2 chips, and the loser loses 2 chips.\n' \
+           'Your ultimate goal is to maximize your total chips won across many matches, not just to win individual hands.\n' \
+           '\n' \
            'You are playing Kuhn poker with the opponent. The actions are denoted by <Bet> and <Pass>.'
 
 

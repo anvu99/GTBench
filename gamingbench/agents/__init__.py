@@ -15,6 +15,9 @@ from gamingbench.agents.ltm_cot_agent import LTMCotAgent
 from gamingbench.agents.expel_agent import ExpelAgent
 from gamingbench.agents.expel_cot_agent import ExpelCotAgent
 
+from gamingbench.agents.reasoning_bank_agent import ReasoningBankAgent
+from gamingbench.agents.reasoning_bank_cot_agent import ReasoningBankCotAgent
+
 __all__ = [
     "PromptAgent",
     "CoTAgent",
@@ -30,5 +33,7 @@ __all__ = [
     "EpisodicWindowAgent",
     "EpisodicWindowCotAgent",
     "ExpelAgent",
-    "ExpelCotAgent"
+    "ExpelCotAgent",
+    "ReasoningBankAgent",
+    "ReasoningBankCotAgent"
 ]

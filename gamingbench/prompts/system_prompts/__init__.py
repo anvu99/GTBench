@@ -9,7 +9,7 @@ from gamingbench.prompts.system_prompts import nim
 from gamingbench.prompts.system_prompts import pig
 from gamingbench.prompts.system_prompts import kuhn_poker
 from gamingbench.prompts.system_prompts import prisoners_dilemma
-
+from gamingbench.prompts.system_prompts import cooperative_negotiation
 
 # maps
 mapping = {
@@ -22,7 +22,8 @@ mapping = {
     'nim': nim,
     'pig': pig,
     'kuhn_poker': kuhn_poker,
-    'python_iterated_prisoners_dilemma': prisoners_dilemma
+    'python_iterated_prisoners_dilemma': prisoners_dilemma,
+    'cooperative_negotiation': cooperative_negotiation
 }
 
 

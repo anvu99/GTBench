@@ -43,9 +43,9 @@ class OpenSpielGame:
         chat_channel = ChatChannel()
 
         # [LTM Integration] Initialize agent state for tracking
-        game_intro = construct_game_intro(self.game_name)
         for i, agent in enumerate(agent_list):
             if hasattr(agent, 'reset_game_state'):
+                game_intro = construct_game_intro(self.game_name, enable_chat=getattr(agent, 'enable_chat', False))
                 opponent_idx = 1 - i if len(agent_list) == 2 else 0
                 opponent_name = f"{agent_list[opponent_idx].agent_name}_{model_list[opponent_idx].nick_name}" if len(agent_list) > 1 else "unknown"
                 agent.reset_game_state(opponent_name, game_intro)
@@ -64,9 +64,11 @@ class OpenSpielGame:
                 self.env.apply_action(action)
 
             elif self.env.is_simultaneous_node():
-                # Chat Phase (Simultaneous: Player 0 speaks first)
+                # Chat Phase (Simultaneous: Speakers rotate each round)
                 if all(getattr(agent, "enable_chat", False) for agent in agent_list):
-                    for player_idx in range(self.env.num_players()):
+                    round_idx = num_step // self.env.num_players()
+                    for i in range(self.env.num_players()):
+                        player_idx = (round_idx + i) % self.env.num_players()
                         obs_dict = self.openspiel_observation_to_dict(player_idx, str(self.env))
                         obs_dict['env_name'] = self.game_name
                         

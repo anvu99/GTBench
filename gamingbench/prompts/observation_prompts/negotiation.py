@@ -1,12 +1,16 @@
 
 def _construct_head_prompt():
-    return 'You are negotiating the division of Peppers, Strawberries, and Cherries with the opponent. Different values these items hold for both you and your opponent. The process is structured into two stages per round: the proposal stage and the utterance stage.' \
+    return 'You are negotiating the division of Peppers, Strawberries, and Cherries with the opponent. Different items hold different values for both you and your opponent. ' \
+           'CRITICALLY: Your ultimate goal is to maximize your total score across multiple matches to beat the opponent. ' \
+           'If an agreement is reached, your score for the match is the sum of the items you receive multiplied by your private valuation for those items. ' \
+           'If negotiations break down and no agreement is reached, your score is 0. ' \
+           'The process is structured into two stages per round: the proposal stage and the utterance stage.' \
 
 def _construct_propose_stage_prompt():
-    return 'Now, you are in the Proposal stage: you\'ll determine the division of items you desire. This is expressed as [a, b, c], where \'a\' represents the quantity of Peppers, \'b\' the quantity of Strawberries, and \'c\' the quantity of Cherries you wish to acquire. It\'s crucial to base this division on the perceived value these items have for you, keeping in mind that the goal is to reach a mutually agreeable solution.'
+    return 'Now, you are in the Proposal stage: you\'ll determine the division of items you desire. This is expressed as [a, b, c], where \'a\' represents the quantity of Peppers, \'b\' the quantity of Strawberries, and \'c\' the quantity of Cherries you wish to acquire. It\'s crucial to base this division on your private valuations. You must reach a mutually agreeable solution to avoid a score of 0, but you should aggressively aim to extract as much value as possible from the split. WARNING: Your Proposal is a binding offer. If the opponent replies with <Agree>, the game ends immediately and the items are split exactly according to your Proposal.'
 
 def _construct_utterance_stage_prompt():
-    return 'Now, you are in the Utterance Stage: you communicate to your opponent what you want, again in the format [a, b, c]. This utterance is your strategic communication and doesn\'t necessarily have to reflect your actual desires or the proposal you formulated in the first stage. It\'s a tool for negotiation, potentially used to mislead, bluff, or strategically reveal information to your opponent.'
+    return 'Now, you are in the Utterance Stage: you communicate to your opponent what you want, again in the format [a, b, c]. This utterance is your strategic communication and doesn\'t necessarily have to reflect your actual desires or the proposal you formulated in the first stage. It\'s a tool for negotiation, potentially used to mislead, bluff, or strategically reveal information to your opponent. Your Utterance is non-binding "cheap talk". The opponent cannot <Agree> to your Utterance to end the game.'
 
 def _solution_prompt():
     return 'Remember, the key in such negotiations is understanding that your opponent also has their value system for these items, which is unknown to you. Balancing between revealing your true desires and misleading your opponent to gain a favorable outcome is essential. It\'s also important to be adaptive, as the negotiation progresses and you gather more information about your opponent\'s preferences and tactics.'

@@ -68,7 +68,7 @@ class EpisodicWindowAgent(PromptAgent):
                 notes_text=current_notes
             )
             from gamingbench.prompts.observation_prompts import construct_game_intro
-            game_intro = construct_game_intro(env_name)
+            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
             observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + ew_injection, 1)
             
         return system_prompt, observation_prompt
@@ -97,7 +97,7 @@ class EpisodicWindowAgent(PromptAgent):
         game_intro = getattr(self, 'current_game_intro', "Game rules unavailable.")
         if not game_intro or game_intro == "Game rules unavailable.":
             from gamingbench.prompts.observation_prompts import construct_game_intro
-            game_intro = construct_game_intro(env_name)
+            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
             
         from gamingbench.utils.utils import strip_thinking_block
         

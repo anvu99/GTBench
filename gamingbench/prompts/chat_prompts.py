@@ -14,3 +14,11 @@ CHAT_HISTORY_INJECTION = """\
 --- ONGOING CHAT ---
 {chat_history}
 """
+
+COOP_CHAT_INSTRUCTION = """\
+Before making your next game move, you have the opportunity to send a short chat message to your partner. 
+Use this channel to communicate and coordinate to increase your joint utility.
+
+Write a single, concise chat message to your partner. 
+Do NOT output a game move, and do NOT output internal reasoning. Just output the message text you wish to send enclosed in <chat> and </chat> tags.
+"""

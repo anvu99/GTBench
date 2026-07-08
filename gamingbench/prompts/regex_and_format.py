@@ -22,8 +22,8 @@ def get_step_env_regex_and_format(env_name):
     elif env_name == 'nim':
         regex = '(<pile:1, take:1>|<pile:2, take:[1-3]>|<pile:3, take:[1-5]>|<pile:4, take:[1-7]>)'
         format = '<pile:x, take:y>, e.g., <pile:1, take:1>, <pile:4, take:7>'
-    elif env_name == 'negotiation':
-        regex = '(?:agree|Agree|AGREE)|\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]'
+    elif env_name in ['negotiation', 'cooperative_negotiation']:
+        regex = '(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>|<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
         format = '<Proposal|Utterance: [a, b, c]> e.g., <Proposal: [1, 2, 3]> <Utterance: [4, 2, 1]> or <agree>'
     elif env_name == 'first_sealed_auction':
         regex = '<(?:[0-9]|10)>'
