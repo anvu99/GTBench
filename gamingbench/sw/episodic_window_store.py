@@ -42,8 +42,11 @@ class EpisodicWindowStore:
     def load(self, filepath: str) -> None:
         """Deserializes the EW store from a JSON file."""
         if os.path.exists(filepath):
-            with open(filepath, "r") as f:
-                data = json.load(f)
+            try:
+                with open(filepath, "r") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
             obs_dict = data.get("observations", {})
             self.observations = {k: deque(v) for k, v in obs_dict.items()}
             self.notes = data.get("notes", {})

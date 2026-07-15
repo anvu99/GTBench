@@ -4,7 +4,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 class PrisonersDilemma(OpenSpielGame):
 
 
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("python_iterated_prisoners_dilemma")
 
     def openspiel_action_to_agent(self, action):

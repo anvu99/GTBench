@@ -8,7 +8,7 @@ import re
 
 
 class TicTacToe(OpenSpielGame):
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("tic_tac_toe")
         self.game_name = 'tictactoe'
         pass

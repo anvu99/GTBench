@@ -43,8 +43,12 @@ def run_self_tgd_synthesis(
         {"role": "user", "content": prompt}
     ]
 
-    from gamingbench.utils.utils import strip_thinking_block
-    generations, _, _ = model.query(messages, n=1, stop=None, prompt_type='move')
-    raw_generation = generations[0]
+    from gamingbench.utils.utils import strip_thinking_block, query_with_thinking_validation
+    raw_generation = query_with_thinking_validation(model, messages, prompt_type='move')
     new_self_ltm = strip_thinking_block(raw_generation)
-    return new_self_ltm, raw_generation
+    
+    if not new_self_ltm.strip():
+        # Keep current state if validation and retries failed
+        return current_self_ltm, raw_generation, prompt
+        
+    return new_self_ltm, raw_generation, prompt

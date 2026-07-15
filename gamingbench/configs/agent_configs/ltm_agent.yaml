@@ -1,5 +1,5 @@
 agent_name: LTMAgent
 num_generations: 1
 majority_vote: False
-summarize_every: 5
+summarize_every: 3
 ltm_store_path: ltm_store.json

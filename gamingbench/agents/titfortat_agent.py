@@ -6,7 +6,7 @@ from gamingbench.agents.base_agent import BaseAgent
 class TitForTatAgent(BaseAgent):
 
     def __init__(self, config, **kwargs):
-        super(TitForTatAgent, self).__init__(config)
+        super(TitForTatAgent, self).__init__(config, **kwargs)
 
     def step(self, observations):
         assert observations, print('Tit-for-Tat Agent only works for Iterated Prisoner\'s Dilemma')

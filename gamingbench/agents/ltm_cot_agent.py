@@ -43,8 +43,13 @@ class LTMCotAgent(LTMAgent):
             self.current_opponent_key and self.ltm_store.get(self.current_opponent_key)
         )
         has_self_ltm = bool(self.self_ltm_store.get("__self__"))
+        has_partner_ltm = bool(
+            getattr(self, 'hive_mode', False) and 
+            self.partner_opponent_key and 
+            self.partner_ltm_store.get(self.partner_opponent_key)
+        )
 
-        if has_opponent_ltm or has_self_ltm:
+        if has_opponent_ltm or has_self_ltm or has_partner_ltm:
             # Structured Thought format — signal evaluation is woven into
             # the reasoning itself so the agent cannot skip it or apply it post-hoc.
             from gamingbench.prompts.regex_and_format import get_step_env_regex_and_format
@@ -55,6 +60,8 @@ class LTMCotAgent(LTMAgent):
                 scan_sources.append("SELF-REPUTATION DATABASE")
             if has_opponent_ltm:
                 scan_sources.append("OPPONENT REPUTATION DATABASE")
+            if has_partner_ltm:
+                scan_sources.append("PARTNER'S OBSERVATIONS ABOUT YOUR PLAY")
             scan_label = " and ".join(scan_sources)
 
             cot_stages = []
@@ -68,6 +75,9 @@ class LTMCotAgent(LTMAgent):
                 
             if has_self_ltm:
                 cot_stages.append("[Guardrail Verification] Check if your candidate move matches the 'What' field of any firing SELF signals. If so, execute their 'Verification' calculation to ensure the 'Risk' will not materialize. If the verification shows the risk will occur, you MUST reject the candidate and formulate a new move.")
+                
+            if has_partner_ltm:
+                cot_stages.append("[Partner Feedback Integration] Your partner has developed observations about you. Use them strategically: anticipate how your partner expects you to react based on their observations, and choose a move that will MAXIMIZE the team's shared fireworks score.")
                 
             cot_stages.append("[Final Decision] State your final chosen move based on the reasoning above.")
             

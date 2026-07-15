@@ -43,8 +43,15 @@ class LTMAgent(PromptAgent):
         # ── Self-LTM store ────────────────────────────────────────────────────
         self.self_ltm_store_path = self.ltm_store_path.replace('ltm_store', 'self_ltm_store')
         self.self_ltm_store = LTMStore()
+        
+        self.hive_mode = getattr(config, "hive_mode", False)
         if os.path.exists(self.self_ltm_store_path):
             self.self_ltm_store.load(self.self_ltm_store_path)
+            
+        # ── Partner LTM store ────────────────────────────────────────────────
+        self.partner_ltm_store = LTMStore()
+        self.partner_ltm_store_path = None
+        self.partner_opponent_key = None
             
         self.window_summaries = []
         self.recent_internal_reasoning = []
@@ -60,13 +67,26 @@ class LTMAgent(PromptAgent):
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align LTM storage with the run's experiment folder."""
-        self.ltm_store_path = os.path.join(storage_dir, os.path.basename(self.ltm_store_path))
+        base = os.path.basename(self.ltm_store_path)
+        if getattr(self, 'memory_mode', 'combined') == 'separate' or getattr(self, 'hive_mode', False):
+            pid = getattr(self, 'player_id', 'pX')
+            if f"_{pid}.json" not in base:
+                base = base.replace(".json", f"_{pid}.json")
+                
+        self.ltm_store_path = os.path.join(storage_dir, base)
         self.self_ltm_store_path = self.ltm_store_path.replace('ltm_store', 'self_ltm_store')
         # Reload if it happens to already exist in this specific directory
         if os.path.exists(self.ltm_store_path):
             self.ltm_store.load(self.ltm_store_path)
         if os.path.exists(self.self_ltm_store_path):
             self.self_ltm_store.load(self.self_ltm_store_path)
+
+    def set_partner_store(self, path: str, my_key: str):
+        """Called by main.py in Hive mode to inject the partner's LTM store."""
+        self.partner_ltm_store_path = path
+        self.partner_opponent_key = my_key
+        if path and os.path.exists(path):
+            self.partner_ltm_store.load(path)
 
     def reset_game_state(self, opponent_key, game_intro):
         """Called at the start of a game to prepare tracking."""
@@ -77,6 +97,9 @@ class LTMAgent(PromptAgent):
             self.ltm_store.load(self.ltm_store_path)
         if not self.batch_mode and os.path.exists(self.self_ltm_store_path):
             self.self_ltm_store.load(self.self_ltm_store_path)
+        if not self.batch_mode and getattr(self, 'hive_mode', False) and self.partner_ltm_store_path:
+            if os.path.exists(self.partner_ltm_store_path):
+                self.partner_ltm_store.load(self.partner_ltm_store_path)
             
         if not hasattr(self, 'game_count'):
             self.game_count = 0
@@ -84,44 +107,95 @@ class LTMAgent(PromptAgent):
         self.window_summaries = []
         self.recent_internal_reasoning = []
         self.move_count = 0
-        self.current_opponent_key = opponent_key
         self.current_game_intro = game_intro
+        
+        if getattr(self, 'hive_mode', False) and not isinstance(opponent_key, list):
+            # Force separate memory mode for Hive
+            opponent_key = opponent_key.split('+')
+            
+        if isinstance(opponent_key, list):
+            self.current_opponent_keys = opponent_key
+            self.memory_mode = 'separate'
+            self.current_opponent_key = opponent_key[0] if len(opponent_key) == 1 else None
+        else:
+            self.current_opponent_keys = [opponent_key]
+            self.memory_mode = 'combined'
+            self.current_opponent_key = opponent_key
 
     def _build_prompts(self, observations):
         system_prompt, observation_prompt = super()._build_prompts(observations)
         
         current_ltm = None
-        if self.current_opponent_key:
-            current_ltm = self.ltm_store.get(self.current_opponent_key)
-            
+        if getattr(self, 'memory_mode', 'combined') == 'separate':
+            ltms = []
+            for key in self.current_opponent_keys:
+                ltm = self.ltm_store.get(key)
+                if ltm and ltm.strip() != "(No signals currently stored)":
+                    peer_id = key.split(':')[0] if ':' in key else key
+                    active_ltm = ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+                    # Replaced `f"TEAMMATE {peer_id}"` with `peer_id` so the prompt refers directly to "Player X" instead of "TEAMMATE LTMCotAgent"
+                    ltms.append(LTM_INJECTION_PROMPT.format(opponent_id=peer_id, ltm_text=active_ltm))
+            if ltms:
+                current_ltm = "\n\n".join(ltms)
+        else:
+            if self.current_opponent_key:
+                current_ltm = self.ltm_store.get(self.current_opponent_key)
+                
+            # Failsafe: In Hive mode, both agents share the exact same ltm_store_path. 
+            # If Player 1's in-memory memory is empty due to batch cloning skips, reload from disk.
+            if not current_ltm and getattr(self, 'hive_mode', False) and getattr(self, 'ltm_store_path', None):
+                if os.path.exists(self.ltm_store_path):
+                    self.ltm_store.load(self.ltm_store_path)
+                    if self.current_opponent_key:
+                        current_ltm = self.ltm_store.get(self.current_opponent_key)
+                        
+            if current_ltm and current_ltm.strip() != "(No signals currently stored)":
+                active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+                # Extracted peer_id from current_opponent_key to use "Player X" instead of the hardcoded string "the opponent"
+                peer_id = self.current_opponent_key.split(':')[0] if ':' in self.current_opponent_key else self.current_opponent_key
+                current_ltm = LTM_INJECTION_PROMPT.format(opponent_id=peer_id, ltm_text=active_ltm)
+                
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_MEMORY_NOTICE
+            if current_ltm:
+                current_ltm = HIVE_MEMORY_NOTICE + "\n\n" + current_ltm
+            else:
+                current_ltm = HIVE_MEMORY_NOTICE
+                
         if current_ltm:
-            active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
-            ltm_injection = LTM_INJECTION_PROMPT.format(
-                opponent_id="the opponent",
-                ltm_text=active_ltm
-            )
-            # Inject LTM right after the game intro in the user prompt
-            from gamingbench.prompts.observation_prompts import construct_game_intro
-            env_name = observations['env_name']
-            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
-            observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + ltm_injection, 1)
+            observation_prompt = current_ltm + "\n\n" + observation_prompt
 
         current_self_ltm = self.self_ltm_store.get("__self__")
-        if current_self_ltm:
+        if current_self_ltm and current_self_ltm.strip() != "(No signals currently stored)":
             active_self_ltm = current_self_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             self_ltm_injection = SELF_LTM_INJECTION_PROMPT.format(
                 self_ltm_text=active_self_ltm
             )
             from gamingbench.prompts.observation_prompts import construct_game_intro
             env_name = observations['env_name']
-            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
+            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
             # Inject self-LTM after the opponent LTM (or after game intro if no opponent LTM)
             if current_ltm:
-                active_opp_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
-                inject_after = LTM_INJECTION_PROMPT.format(opponent_id="the opponent", ltm_text=active_opp_ltm)
+                inject_after = current_ltm
             else:
                 inject_after = game_intro
             observation_prompt = observation_prompt.replace(inject_after, inject_after + "\n\n" + self_ltm_injection, 1)
+            
+        if getattr(self, 'hive_mode', False) and self.partner_opponent_key:
+            partner_view = self.partner_ltm_store.get(self.partner_opponent_key)
+            if partner_view and partner_view.strip() != "(No signals currently stored)":
+                active_partner_view = partner_view.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+                from gamingbench.prompts.hive_prompts import PARTNER_VIEW_OF_ME_PROMPT
+                partner_injection = PARTNER_VIEW_OF_ME_PROMPT.format(partner_view_text=active_partner_view)
+                if 'self_ltm_injection' in locals() and self_ltm_injection in observation_prompt:
+                    observation_prompt = observation_prompt.replace(self_ltm_injection, self_ltm_injection + "\n\n" + partner_injection, 1)
+                elif current_ltm:
+                    observation_prompt = observation_prompt.replace(current_ltm, current_ltm + "\n\n" + partner_injection, 1)
+                else:
+                    if 'game_intro' not in locals():
+                        from gamingbench.prompts.observation_prompts import construct_game_intro
+                        game_intro = construct_game_intro(observations['env_name'], enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
+                    observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + partner_injection, 1)
             
         return system_prompt, observation_prompt
 
@@ -240,8 +314,27 @@ Your action wrapped by <>, i.e., {fmt}
     def _run_window_summarization(self, observations):
         """Fires a separate standalone LLM call to summarize the recent window."""
         self.logger.info('-' * 20 + f'{self.agent_name} Summarization' + '-' * 20)
-        current_ltm = self.ltm_store.get(self.current_opponent_key) if self.current_opponent_key else None
-        
+        current_ltm = None
+        if getattr(self, 'memory_mode', 'combined') == 'separate':
+            ltms = []
+            for key in self.current_opponent_keys:
+                ltm = self.ltm_store.get(key)
+                if ltm:
+                    peer_id = key.split(':')[0] if ':' in key else key
+                    active_ltm = ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+                    # Replaced `f"TEAMMATE {peer_id}"` with `peer_id` to maintain consistent "Player X" naming in summarization
+                    ltms.append(LTM_INJECTION_PROMPT.format(opponent_id=peer_id, ltm_text=active_ltm))
+            if ltms:
+                current_ltm = "\n\n".join(ltms)
+        else:
+            if self.current_opponent_key:
+                current_ltm = self.ltm_store.get(self.current_opponent_key)
+            if current_ltm:
+                active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+                # Extracted peer_id to replace "the opponent" with "Player X" in the summarization prompt
+                peer_id = self.current_opponent_key.split(':')[0] if ':' in self.current_opponent_key else self.current_opponent_key
+                current_ltm = LTM_INJECTION_PROMPT.format(opponent_id=peer_id, ltm_text=active_ltm)
+                
         env_name = observations.get('env_name', 'unknown')
         chat_context = observations.get('chat_context', '')
         
@@ -251,12 +344,7 @@ Your action wrapped by <>, i.e., {fmt}
         user_prompt_parts = [game_intro]
         
         if current_ltm:
-            active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
-            ltm_injection = LTM_INJECTION_PROMPT.format(
-                opponent_id="the opponent",
-                ltm_text=active_ltm
-            )
-            user_prompt_parts.append(ltm_injection)
+            user_prompt_parts.append(current_ltm)
 
         current_self_ltm = self.self_ltm_store.get("__self__")
         if current_self_ltm:
@@ -290,8 +378,24 @@ Your action wrapped by <>, i.e., {fmt}
         
         try:
             from gamingbench.utils.utils import strip_thinking_block
-            generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-            summary = strip_thinking_block(generations[0])
+            
+            thinking_enabled = getattr(self.model, 'enable_thinking', False)
+            retries = 0
+            while True:
+                generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                raw_gen = generations[0]
+                has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
+                if not thinking_enabled or has_tag or retries >= 2:
+                    break
+                retries += 1
+                self.logger.warning(f"Missing thinking tag in window summarization, retrying ({retries}/2)...")
+                
+            if thinking_enabled and not has_tag:
+                self.logger.error("Failed to generate thinking tags for summarization after retries.")
+                summary = "Game/Opponent summary: [Summary failed]\n\nReasoning memory: [Reasoning failed]"
+            else:
+                summary = strip_thinking_block(raw_gen)
+                
             self.window_summaries.append(f"Window ending at move {self.move_count}:\n{summary}")
             self.logger.info(f'Summarization: {summary}')
             
@@ -322,8 +426,10 @@ Your action wrapped by <>, i.e., {fmt}
         
         if current_ltm:
             active_ltm = current_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+            # Extracted peer_id to replace "the opponent" with "Player X" in the final summarization prompt
+            peer_id = self.current_opponent_key.split(':')[0] if ':' in self.current_opponent_key else self.current_opponent_key
             ltm_injection = LTM_INJECTION_PROMPT.format(
-                opponent_id="the opponent",
+                opponent_id=peer_id,
                 ltm_text=active_ltm
             )
             user_prompt_parts.append(ltm_injection)
@@ -353,8 +459,24 @@ Your action wrapped by <>, i.e., {fmt}
         
         try:
             from gamingbench.utils.utils import strip_thinking_block
-            generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-            summary = strip_thinking_block(generations[0])
+            
+            thinking_enabled = getattr(self.model, 'enable_thinking', False)
+            retries = 0
+            while True:
+                generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                raw_gen = generations[0]
+                has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
+                if not thinking_enabled or has_tag or retries >= 2:
+                    break
+                retries += 1
+                self.logger.warning(f"Missing thinking tag in final summarization, retrying ({retries}/2)...")
+                
+            if thinking_enabled and not has_tag:
+                self.logger.error("Failed to generate thinking tags for final summarization after retries.")
+                summary = "Game/Opponent summary: [Summary failed]\n\nReasoning memory: [Reasoning failed]"
+            else:
+                summary = strip_thinking_block(raw_gen)
+                
             self.window_summaries.append(f"Final Window ending at game over:\n{summary}")
             self.logger.info(f'Final Summarization: {summary}')
             
@@ -375,213 +497,220 @@ Your action wrapped by <>, i.e., {fmt}
 
     def post_game_update(self, game_history: str, final_board_state: str = "", env_name: str = 'unknown'):
         """Runs the LTM gradient and synthesis pipelines after a game."""
-        if not self.current_opponent_key:
+        player_index = getattr(self, 'current_player_index', None)
+        if player_index is not None:
+            game_history = game_history.replace(f"Player {player_index}", "You")
+
+        if not getattr(self, 'current_opponent_keys', None):
             return
 
-        # Trigger a final summarization if we have un-summarized moves.
-        # We compare total moves made against the number of moves already summarized
-        # to catch edge cases where the game ends exactly on a summarize_every boundary.
+        game_intro_for_update = self.current_game_intro or "Game rules unavailable."
+
         if self.move_count > len(self.window_summaries) * self.summarize_every:
             self._run_final_summarization(game_history, final_board_state, env_name)
 
         self.logger.info('-' * 20 + f'{self.agent_name} Post-Game LTM Update' + '-' * 20)
-        current_ltm = self.ltm_store.get(self.current_opponent_key) or "(No memory yet)"
         window_summaries_str = "\n\n".join(self.window_summaries) if self.window_summaries else "No window summaries recorded."
 
-        # ── Gradient Engine ──────────────────────────────────────────────────
         from concurrent.futures import ThreadPoolExecutor
-        
         from gamingbench.prompts.observation_prompts import construct_game_history_legend
         try:
             game_history_legend = construct_game_history_legend(env_name)
         except Exception:
             game_history_legend = "Game history legend unavailable."
             
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            future_opp = ex.submit(
-                run_gradient_engine,
-                model=self.model,
-                game_intro=self.current_game_intro or "Game rules unavailable.",
-                game_history=game_history,
-                window_summaries=window_summaries_str,
-                current_ltm=current_ltm,
-                game_history_legend=game_history_legend
-            )
-            
+        opp_results = {}
+        with ThreadPoolExecutor(max_workers=max(2, len(self.current_opponent_keys)+1)) as ex:
+            if getattr(self, 'memory_mode', 'combined') == 'separate':
+                from gamingbench.ltm.gradient_engine import run_separate_gradient_engine
+                future_opps = {}
+                for key in self.current_opponent_keys:
+                    peer_id = key.split(':')[0] if ':' in key else key
+                    current_ltm = self.ltm_store.get(key) or "(No memory yet)"
+                    future_opps[key] = ex.submit(
+                        run_separate_gradient_engine,
+                        model=self.model,
+                        peer_id=peer_id,
+                        game_intro=game_intro_for_update,
+                        game_history=game_history,
+                        window_summaries=window_summaries_str,
+                        current_ltm=current_ltm,
+                        game_history_legend=game_history_legend
+                    )
+                for key, fut in future_opps.items():
+                    opp_results[key] = fut.result()
+            else:
+                current_ltm = self.ltm_store.get(self.current_opponent_key) or "(No memory yet)"
+                future_opp = ex.submit(
+                    run_gradient_engine,
+                    model=self.model,
+                    game_intro=game_intro_for_update,
+                    game_history=game_history,
+                    window_summaries=window_summaries_str,
+                    current_ltm=current_ltm,
+                    game_history_legend=game_history_legend
+                )
+                opp_results[self.current_opponent_key] = future_opp.result()
+
             current_self_ltm = self.self_ltm_store.get("__self__") or "(No self-memory yet)"
+            player_index = getattr(self, 'current_player_index', None)
+            agent_id = "You"
             future_self = ex.submit(
                 run_self_gradient_engine,
                 model=self.model,
-                game_intro=self.current_game_intro or "Game rules unavailable.",
+                agent_id=agent_id,
+                game_intro=game_intro_for_update,
                 game_history=game_history,
                 window_summaries=window_summaries_str,
                 current_self_ltm=current_self_ltm,
                 game_history_legend=game_history_legend
             )
-            
-            structural_report, raw_grad_gen = future_opp.result()
-            self_structural_report, raw_self_grad_gen = future_self.result()
+            self_structural_report, raw_self_grad_gen, self_grad_prompt = future_self.result()
 
-        self.logger.info(f'Gradient Report:\n{structural_report}')
+        for key, (rep, raw, prompt) in opp_results.items():
+            self.logger.info(f'Gradient Report ({key}):\n{rep}')
         self.logger.info(f'Self Gradient Report:\n{self_structural_report}')
-        grad_prompt = None
-        self_grad_prompt = None
-        if getattr(self, 'game_count', 0) == 1:
-            grad_prompt = (self.current_game_intro or "Game rules unavailable.") + "\n\n" + GRADIENT_ENGINE_PROMPT.format(
-                game_history=game_history,
-                window_summaries=window_summaries_str,
-                current_ltm=current_ltm,
-                game_history_legend=game_history_legend
-            )
-            self_grad_prompt = (self.current_game_intro or "Game rules unavailable.") + "\n\n" + __import__('gamingbench.ltm.prompts', fromlist=['SELF_GRADIENT_ENGINE_PROMPT']).SELF_GRADIENT_ENGINE_PROMPT.format(
-                game_history=game_history,
-                window_summaries=window_summaries_str,
-                current_self_ltm=current_self_ltm,
-                game_history_legend=game_history_legend
-            )
 
-        # ── Batch mode early-out ─────────────────────────────────────────────
-        # Store gradient data for the batch runner and defer synthesis.
+        # Trace Logging
+        log_file = getattr(self, '_parent_store_path', self.ltm_store_path).replace('.json', '_trace.log')
+        with _trace_log_lock:
+            with open(log_file, "a", encoding="utf-8") as f:
+                for key, (rep, raw, prompt) in opp_results.items():
+                    f.write(f"=== GAME {getattr(self, 'game_count', 0)} POST-GAME GRADIENT REPORT ({key}) ===\n")
+                    f.write(f"PROMPT:\n{prompt}\n")
+                    f.write(f"RESPONSE (raw):\n{raw}\n")
+                    f.write("=" * 50 + "\n\n")
+    
+                f.write(f"=== GAME {getattr(self, 'game_count', 0)} SELF POST-GAME GRADIENT REPORT ===\n")
+                f.write(f"PROMPT:\n{self_grad_prompt}\n")
+                f.write(f"RESPONSE (raw):\n{raw_self_grad_gen}\n")
+                f.write("=" * 50 + "\n\n")
+
         if self.batch_mode:
             self._last_batch_result = {
-                "opp": (structural_report, raw_grad_gen),
-                "self": (self_structural_report, raw_self_grad_gen),
-                "opp_prompt": grad_prompt,
-                "self_prompt": self_grad_prompt
+                "opp": opp_results,
+                "self": (self_structural_report, raw_self_grad_gen, self_grad_prompt)
             }
             self.logger.info('Batch mode: opponent and self gradient data collected, synthesis deferred.')
             return
 
-        # ── Trace Logging (Gradient Reports) ──────────────────────────────────
-        log_file = getattr(self, '_parent_store_path', self.ltm_store_path).replace('.json', '_trace.log')
-        with _trace_log_lock:
-            with open(log_file, "a") as f:
-                f.write(f"=== GAME {getattr(self, 'game_count', 0)} POST-GAME GRADIENT REPORT ===\n")
-                if grad_prompt:
-                    f.write(f"PROMPT:\n{grad_prompt}\n")
-                f.write(f"RESPONSE (raw):\n{raw_grad_gen}\n")
-                f.write("=" * 50 + "\n\n")
-    
-                f.write(f"=== GAME {getattr(self, 'game_count', 0)} SELF POST-GAME GRADIENT REPORT ===\n")
-                if self_grad_prompt:
-                    f.write(f"PROMPT:\n{self_grad_prompt}\n")
-                f.write(f"RESPONSE (raw):\n{raw_self_grad_gen}\n")
-                f.write("=" * 50 + "\n\n")
+        # TGD Synthesis
+        new_ltms = {}
+        with ThreadPoolExecutor(max_workers=max(2, len(self.current_opponent_keys)+1)) as ex:
+            if getattr(self, 'memory_mode', 'combined') == 'separate':
+                from gamingbench.ltm.tgd_synthesizer import run_separate_tgd_synthesis
+                future_synth = {}
+                for key, (rep, raw, _) in opp_results.items():
+                    peer_id = key.split(':')[0] if ':' in key else key
+                    current_ltm = self.ltm_store.get(key) or "(No memory yet)"
+                    future_synth[key] = ex.submit(
+                        run_separate_tgd_synthesis,
+                        model=self.model,
+                        peer_id=peer_id,
+                        game_intro=game_intro_for_update,
+                        current_ltm=current_ltm,
+                        gradient_reports=[rep]
+                    )
+                for key, fut in future_synth.items():
+                    new_ltms[key] = fut.result()
+            else:
+                current_ltm = self.ltm_store.get(self.current_opponent_key) or "(No memory yet)"
+                rep, raw, _ = opp_results[self.current_opponent_key]
+                future_new_ltm = ex.submit(
+                    run_tgd_synthesis,
+                    model=self.model,
+                    game_intro=game_intro_for_update,
+                    current_ltm=current_ltm,
+                    gradient_reports=[rep]
+                )
+                new_ltms[self.current_opponent_key] = future_new_ltm.result()
 
-        # ── TGD Synthesis & Self TGD Synthesis (Parallel) ─────────────────────
-        from concurrent.futures import ThreadPoolExecutor
-        
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            future_new_ltm = ex.submit(
-                run_tgd_synthesis,
-                model=self.model,
-                game_intro=self.current_game_intro or "Game rules unavailable.",
-                current_ltm=current_ltm,
-                gradient_reports=[structural_report]
-            )
             future_new_self_ltm = ex.submit(
                 run_self_tgd_synthesis,
                 model=self.model,
-                game_intro=self.current_game_intro or "Game rules unavailable.",
+                game_intro=game_intro_for_update,
                 current_self_ltm=current_self_ltm,
                 gradient_reports=[self_structural_report]
             )
-            new_ltm, raw_synth_gen = future_new_ltm.result()
-            new_self_ltm, raw_self_synth_gen = future_new_self_ltm.result()
+            new_self_ltm, raw_self_synth_gen, _ = future_new_self_ltm.result()
 
-        self.logger.info(f'New LTM:\n{new_ltm}')
-        self.logger.info(f'New Self LTM:\n{new_self_ltm}')
-
-        # ── Trace Logging (TGD Synthesis) ────────────────────────────────────
-        with _trace_log_lock:
-            with open(log_file, "a") as f:
-    
-                f.write(f"=== GAME {getattr(self, 'game_count', 0)} POST-GAME TGD SYNTHESIS ===\n")
-                if getattr(self, 'game_count', 0) == 1:
-                    from gamingbench.ltm.tgd_synthesizer import _format_gradient_reports
-                    tgd_prompt = (self.current_game_intro or "Game rules unavailable.") + "\n\n" + TGD_SYNTHESIS_PROMPT.format(
-                        current_ltm=current_ltm,
-                        n=1,
-                        gradient_reports=_format_gradient_reports([structural_report]),
-                    )
-                    f.write(f"PROMPT:\n{tgd_prompt}\n")
-                f.write(f"RESPONSE (raw):\n{raw_synth_gen}\n")
-    
-
-                f.write("=" * 50 + "\n\n")
-
-        self.ltm_store.update(self.current_opponent_key, new_ltm)
-
+        for key, (new_ltm, raw_synth_gen, _) in new_ltms.items():
+            self.logger.info(f'New LTM ({key}):\n{new_ltm}')
+            self.ltm_store.update(key, new_ltm)
         self.ltm_store.save(self.ltm_store_path)
 
-
-
-
-
-        # ── Trace Logging (Self TGD Synthesis) ────────────────────────────────
-        with _trace_log_lock:
-            with open(log_file, "a") as f:
-    
-                f.write(f"=== GAME {getattr(self, 'game_count', 0)} SELF POST-GAME TGD SYNTHESIS ===\n")
-                f.write(f"RESPONSE:\n{new_self_ltm}\n")
-                f.write("=" * 50 + "\n\n")
-
-        # ── Save self-LTM (no EMA) ────────────────────────────────────────────
+        self.logger.info(f'New Self LTM:\n{new_self_ltm}')
         self.self_ltm_store.update("__self__", new_self_ltm)
         self.self_ltm_store.save(self.self_ltm_store_path)
 
     def flush_batch_updates(self, gradient_data: list) -> None:
-        """Perform a single unified LTM update from a completed batch of N games.
-
-        Called by the batch runner (main.py) after all N parallel games complete.
-        Runs TGD Synthesis once with all N gradient reports, applies batch EMA
-        for opponent confidence scores, and saves. Self-LTM is synthesized without EMA.
-
-        Args:
-            gradient_data: List of {"opp": (structural_report, raw_grad_gen), "self": self_report}
-                           dicts — one per game in the batch. Empty list is a no-op.
-        """
         if not gradient_data:
-            return
-        if not self.current_opponent_key:
-            self.logger.warning('flush_batch_updates: current_opponent_key not set — skipping.')
             return
 
         n = len(gradient_data)
-        # Support legacy 2-tuple format (pre-self-LTM batches) gracefully
-        opp_data = []
+        opp_data_by_key = {}
         self_reports = []
         for d in gradient_data:
             if isinstance(d, dict):
                 if "opp" in d:
-                    opp_data.append(d["opp"])
+                    for k, v in d["opp"].items():
+                        if k not in opp_data_by_key:
+                            opp_data_by_key[k] = []
+                        opp_data_by_key[k].append(v)
                 if "self" in d:
-                    self_structural_report, _ = d["self"]
-                    self_reports.append(self_structural_report)
+                    report = d["self"][0].strip()
+                    if report:
+                        self_reports.append(report)
             else:
-                # Legacy format: d is a tuple (structural_report, raw_grad_gen)
-                opp_data.append(d)
+                self.logger.warning("Old gradient format (non-dict) encountered in flush_batch_updates. Skipping.")
 
-        structural_reports = [r for r, _ in opp_data]
+        if not opp_data_by_key and not self_reports:
+            self.logger.warning("No valid gradient data extracted from batch payloads.")
+            return
 
-        self.logger.info(
-            f'-' * 20 + f'Batch LTM Flush (N={n})' + '-' * 20
-        )
-        current_ltm = self.ltm_store.get(self.current_opponent_key) or '(No memory yet)'
+        self.logger.info(f'-' * 20 + f'Batch LTM Flush (N={n})' + '-' * 20)
 
-        # ── TGD Synthesis & Self TGD Synthesis (Parallel) ─────────────────────
+        game_intro_for_update = self.current_game_intro or "Game rules unavailable."
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_UPDATE_NOTICE
+            game_intro_for_update = HIVE_UPDATE_NOTICE + "\n\n" + game_intro_for_update
+
         from concurrent.futures import ThreadPoolExecutor
-        
-        new_self_ltm = None
-        with ThreadPoolExecutor(max_workers=2) as ex:
-            future_new_ltm = ex.submit(
-                run_tgd_synthesis,
-                model=self.model,
-                game_intro=self.current_game_intro or 'Game rules unavailable.',
-                current_ltm=current_ltm,
-                gradient_reports=structural_reports,
-            )
-            
+        new_ltms = {}
+        # Ensure max_workers is at least 2 and can handle all unique opponent keys
+        with ThreadPoolExecutor(max_workers=max(2, len(opp_data_by_key) + 1)) as ex:
+            if getattr(self, 'memory_mode', 'combined') == 'separate':
+                from gamingbench.ltm.tgd_synthesizer import run_separate_tgd_synthesis
+                future_synth = {}
+                for key, reps_raws in opp_data_by_key.items():
+                    structural_reports = [d[0].strip() for d in reps_raws if d[0].strip()]
+                    if not structural_reports: continue
+                    peer_id = key.split(':')[0] if ':' in key else key
+                    current_ltm = self.ltm_store.get(key) or "(No memory yet)"
+                    future_synth[key] = ex.submit(
+                        run_separate_tgd_synthesis,
+                        model=self.model,
+                        peer_id=peer_id,
+                        game_intro=game_intro_for_update,
+                        current_ltm=current_ltm,
+                        gradient_reports=structural_reports
+                    )
+                for key, fut in future_synth.items():
+                    new_ltms[key] = fut.result()
+            else:
+                for key, reps_raws in opp_data_by_key.items():
+                    structural_reports = [d[0].strip() for d in reps_raws if d[0].strip()]
+                    if structural_reports:
+                        current_ltm = self.ltm_store.get(key) or "(No memory yet)"
+                        future_new_ltm = ex.submit(
+                            run_tgd_synthesis,
+                            model=self.model,
+                            game_intro=game_intro_for_update,
+                            current_ltm=current_ltm,
+                            gradient_reports=structural_reports
+                        )
+                        new_ltms[key] = future_new_ltm.result()
+
             future_new_self_ltm = None
             if self_reports:
                 current_self_ltm = self.self_ltm_store.get("__self__") or '(No self-memory yet)'
@@ -593,70 +722,30 @@ Your action wrapped by <>, i.e., {fmt}
                     gradient_reports=self_reports,
                 )
                 
-            new_ltm, raw_synth_gen = future_new_ltm.result()
+            new_self_ltm = None
             if future_new_self_ltm:
-                new_self_ltm, raw_self_synth_gen = future_new_self_ltm.result()
+                new_self_ltm, raw_self_synth_gen, self_synth_prompt = future_new_self_ltm.result()
 
-        self.logger.info(f'Batch New LTM (N={n}):\n{new_ltm}')
-        if new_self_ltm:
-            self.logger.info(f'Batch New Self LTM (N={n}):\n{new_self_ltm}')
-
-
-
-
-
-        # ── Trace log ─────────────────────────────────────────────────────────
         log_file = getattr(self, '_parent_store_path', self.ltm_store_path).replace('.json', '_trace.log')
         with _trace_log_lock:
-            with open(log_file, 'a') as f:
-                # Write gradient reports deferred from batch games
-                for i, d in enumerate(gradient_data):
-                    if isinstance(d, dict):
-                        f.write(f"=== BATCH GAME {i+1} POST-GAME GRADIENT REPORT ===\n")
-                        if d.get("opp_prompt"):
-                            f.write(f"PROMPT:\n{d['opp_prompt']}\n")
-                        f.write(f"RESPONSE (raw):\n{d['opp'][1]}\n")
-                        f.write("=" * 50 + "\n\n")
-    
-                        if "self" in d:
-                            f.write(f"=== BATCH GAME {i+1} SELF POST-GAME GRADIENT REPORT ===\n")
-                            if d.get("self_prompt"):
-                                f.write(f"PROMPT:\n{d['self_prompt']}\n")
-                            f.write(f"RESPONSE (raw):\n{d['self'][1] if isinstance(d['self'], tuple) else d['self']}\n")
-                            f.write("=" * 50 + "\n\n")
-    
-                f.write(f'=== BATCH FLUSH (N={n}) TGD SYNTHESIS ===\n')
-                if getattr(self, 'game_count', 0) <= n:
-                    from gamingbench.ltm.tgd_synthesizer import _format_gradient_reports
-                    import gamingbench.ltm.prompts as prompts
-                    tgd_prompt = (self.current_game_intro or 'Game rules unavailable.') + "\n\n" + prompts.TGD_SYNTHESIS_PROMPT.format(
-                        current_ltm=current_ltm,
-                        n=n,
-                        gradient_reports=_format_gradient_reports(structural_reports),
-                    )
-                    f.write(f"PROMPT:\n{tgd_prompt}\n")
-                f.write(f'SYNTHESIZED LTM (raw):\n{raw_synth_gen}\n')
+            with open(log_file, "a", encoding="utf-8") as f:
+                for key, (new_ltm, raw_synth_gen, synth_prompt) in new_ltms.items():
+                    self.logger.info(f'Batch New LTM ({key}):\n{new_ltm}')
+                    self.ltm_store.update(key, new_ltm)
+                    
+                    f.write(f"=== BATCH LTM SYNTHESIS ({key}) ===\n")
+                    f.write(f"PROMPT:\n{synth_prompt}\n")
+                    f.write(f"RESPONSE (raw):\n{raw_synth_gen}\n")
+                    f.write("=" * 50 + "\n\n")
 
+                self.ltm_store.save(self.ltm_store_path)
+        
                 if new_self_ltm:
-                    f.write(f'=== BATCH FLUSH (N={n}) SELF TGD SYNTHESIS ===\n')
-                    if getattr(self, 'game_count', 0) <= n:
-                        from gamingbench.ltm.tgd_synthesizer import _format_gradient_reports
-                        import gamingbench.ltm.prompts as prompts
-                        self_tgd_prompt = (self.current_game_intro or 'Game rules unavailable.') + "\n\n" + prompts.SELF_TGD_SYNTHESIS_PROMPT.format(
-                            current_self_ltm=current_self_ltm,
-                            n=n,
-                            gradient_reports=_format_gradient_reports(self_reports),
-                        )
-                        f.write(f"PROMPT:\n{self_tgd_prompt}\n")
-                    f.write(f'SYNTHESIZED SELF LTM (raw):\n{raw_self_synth_gen}\n')
-                f.write('=' * 50 + '\n\n')
-
-        # ── Save ──────────────────────────────────────────────────────────────
-        self.ltm_store.update(self.current_opponent_key, new_ltm)
-
-        self.ltm_store.save(self.ltm_store_path)
-
-        if new_self_ltm:
-            self.self_ltm_store.update("__self__", new_self_ltm)
-            self.self_ltm_store.save(self.self_ltm_store_path)
-
+                    self.logger.info(f'Batch New Self LTM:\n{new_self_ltm}')
+                    self.self_ltm_store.update("__self__", new_self_ltm)
+                    self.self_ltm_store.save(self.self_ltm_store_path)
+                    
+                    f.write(f"=== BATCH SELF LTM SYNTHESIS ===\n")
+                    f.write(f"PROMPT:\n{self_synth_prompt}\n")
+                    f.write(f"RESPONSE (raw):\n{raw_self_synth_gen}\n")
+                    f.write("=" * 50 + "\n\n")

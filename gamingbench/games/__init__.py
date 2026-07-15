@@ -9,3 +9,4 @@ from gamingbench.games.pig import Pig
 from gamingbench.games.kuhn_poker import KuhnPoker
 from gamingbench.games.prisoners_dilemma import PrisonersDilemma
 from gamingbench.games.cooperative_negotiation import CooperativeNegotiation
+from gamingbench.games.hanabi import Hanabi

@@ -1,0 +1,13 @@
+game_name: "Hanabi"
+variant: "Hanabi-Small"
+
+# Configuration details to dynamically build the LLM Prompt.
+# These MUST match the Hanabi-Small configuration from DeepMind's rl_env.py!
+colors: 2
+ranks: 5
+num_players: 2
+max_life_tokens: 1
+
+# Specific GTBench Agent Configs
+max_retry: 3
+player_names: ["Player 1", "Player 2"]

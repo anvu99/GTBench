@@ -16,6 +16,7 @@ class BaseAgent(object):
         self.voting = config.majority_vote
         self.enable_chat = getattr(config, "enable_chat", False)
         self.logger = utils.LLMBenchLogger(None)
+        self.game_config = kwargs.get('game_config', None)
 
     def step(self, observations):
         pass

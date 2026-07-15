@@ -5,7 +5,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 
 class KuhnPoker(OpenSpielGame):
 
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("kuhn_poker")
         pass
 

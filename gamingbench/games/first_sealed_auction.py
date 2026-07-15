@@ -6,7 +6,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 
 
 class FirstSealedAuction(OpenSpielGame):
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("first_sealed_auction")
         pass
 

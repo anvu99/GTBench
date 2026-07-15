@@ -8,7 +8,7 @@ from gamingbench.agents.base_agent import BaseAgent
 class MCTSAgent(BaseAgent):
 
     def __init__(self, config, **kwargs):
-        super(MCTSAgent, self).__init__(config)
+        super(MCTSAgent, self).__init__(config, **kwargs)
         self.rollout_count = config.rollout_count
         self.uct_c = config.uct_c
         self.max_simulations = config.max_simulations

@@ -1,5 +1,5 @@
 import re
-from gamingbench.ltm.prompts import GRADIENT_ENGINE_PROMPT
+from gamingbench.ltm.prompts import GRADIENT_ENGINE_PROMPT, SEPARATE_GRADIENT_ENGINE_PROMPT
 
 def run_gradient_engine(
     model,
@@ -27,9 +27,41 @@ def run_gradient_engine(
         {"role": "user", "content": prompt}
     ]
 
-    from gamingbench.utils.utils import strip_thinking_block
-    generations, _, _ = model.query(messages, n=1, stop=None, prompt_type='move')
-    raw_generation = generations[0]
+    from gamingbench.utils.utils import strip_thinking_block, query_with_thinking_validation
+    raw_generation = query_with_thinking_validation(model, messages, prompt_type='move')
     structural_report = strip_thinking_block(raw_generation).strip()
+    
+    if not structural_report:
+        structural_report = "No signals observed."
 
-    return structural_report, raw_generation
+    return structural_report, raw_generation, prompt
+
+def run_separate_gradient_engine(
+    model,
+    peer_id: str,
+    game_intro: str,
+    game_history: str,
+    window_summaries: str,
+    current_ltm: str,
+    game_history_legend: str
+) -> tuple:
+    prompt = game_intro + "\n\n" + SEPARATE_GRADIENT_ENGINE_PROMPT.format(
+        peer_id=peer_id,
+        game_history=game_history,
+        window_summaries=window_summaries,
+        current_ltm=current_ltm,
+        game_history_legend=game_history_legend
+    )
+
+    messages = [
+        {"role": "user", "content": prompt}
+    ]
+
+    from gamingbench.utils.utils import strip_thinking_block, query_with_thinking_validation
+    raw_generation = query_with_thinking_validation(model, messages, prompt_type='move')
+    structural_report = strip_thinking_block(raw_generation).strip()
+    
+    if not structural_report:
+        structural_report = "No signals observed."
+
+    return structural_report, raw_generation, prompt

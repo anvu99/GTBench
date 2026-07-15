@@ -67,6 +67,7 @@ class ExpelAgent(PromptAgent):
         super(ExpelAgent, self).__init__(config, **kwargs)
         self.rules_store_path = getattr(self, "rules_store_path", "expel_rules.json")
         self.experience_pool_path = getattr(self, "experience_pool_path", "expel_experience.json")
+            
         self.num_fewshots = getattr(self, "num_fewshots", 2)
         self.max_num_rules = getattr(self, "max_num_rules", 15)
         
@@ -74,6 +75,9 @@ class ExpelAgent(PromptAgent):
         self.batch_mode = False
         self._last_batch_result = None
         self.current_fewshots = []
+        self.insight_store: Dict[str, Dict] = {}
+        self.current_trajectory = []
+        self.hive_mode = getattr(config, 'hive_mode', False)
         
         self.rules: List[Tuple[str, int]] = []
         self.experience_pool: Dict[str, Any] = {"success": [], "fail": []}
@@ -111,8 +115,18 @@ class ExpelAgent(PromptAgent):
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align ExpeL storage with the run's experiment folder."""
-        self.rules_store_path = os.path.join(storage_dir, os.path.basename(self.rules_store_path))
-        self.experience_pool_path = os.path.join(storage_dir, os.path.basename(self.experience_pool_path))
+        r_base = os.path.basename(self.rules_store_path)
+        e_base = os.path.basename(self.experience_pool_path)
+        
+        if getattr(self, 'memory_mode', 'combined') == 'separate':
+            pid = getattr(self, 'player_id', 'pX')
+            if f"_{pid}.json" not in r_base:
+                r_base = r_base.replace(".json", f"_{pid}.json")
+            if f"_{pid}.json" not in e_base:
+                e_base = e_base.replace(".json", f"_{pid}.json")
+                
+        self.rules_store_path = os.path.join(storage_dir, r_base)
+        self.experience_pool_path = os.path.join(storage_dir, e_base)
         self._load_memory()
 
     # Identical rule parsing logic from ExpeL base
@@ -210,10 +224,20 @@ class ExpelAgent(PromptAgent):
         
         env_name = observations['env_name']
         system_prompt = construct_system_prompt(env_name)
-        game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
+        game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
         
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_MEMORY_NOTICE
+            game_intro = HIVE_MEMORY_NOTICE + "\n\n" + game_intro
+            
         user_prompt_parts = [game_intro]
         
+        # Failsafe: In Hive mode, both agents share the exact same store_paths. 
+        # If Player 1's in-memory memory is empty due to batch cloning skips, reload from disk.
+        if not self.rules and getattr(self, 'hive_mode', False) and getattr(self, 'rules_store_path', None):
+            if os.path.exists(self.rules_store_path):
+                self._load_memory()
+                
         # ExpeL Memory Injection Block
         if self.rules or self.current_fewshots:
             memory_block = "--- AGENT EXPERIENCE MEMORY ---\n"
@@ -253,14 +277,22 @@ class ExpelAgent(PromptAgent):
         # Parse win/loss from the history string appended by GTBench adapter
         won = False
         match = re.search(r"Your score=([-\d.]+),\s*Opponent score=([-\d.]+)", game_history)
+        coop_match = re.search(r"Cooperative final score = ([-\d.]+)", game_history)
         if match:
             your_score = float(match.group(1))
             opp_score = float(match.group(2))
             won = your_score > opp_score
+        elif coop_match:
+            score = float(coop_match.group(1))
+            won = score > 0
         
         from gamingbench.prompts.observation_prompts import construct_game_intro
-        game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
+        game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
         
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_UPDATE_NOTICE
+            game_intro = HIVE_UPDATE_NOTICE + "\n\n" + game_intro
+            
         match_data = {
             "game_intro": game_intro,
             "trajectory": game_history,

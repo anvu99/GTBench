@@ -9,7 +9,7 @@ from gamingbench.prompts.step_prompts.tot_agent import construct_step_prompt, co
 class ToTAgent(BaseAgent):
 
     def __init__(self, config, **kwargs):
-        super(ToTAgent, self).__init__(config)
+        super(ToTAgent, self).__init__(config, **kwargs)
         self.task_steps = config.task_steps
         self.method_generate = config.method_generate
         self.method_evaluate = config.method_evaluate

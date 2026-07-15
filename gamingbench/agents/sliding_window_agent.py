@@ -11,14 +11,7 @@ class SlidingWindowAgent(PromptAgent):
     def __init__(self, config, **kwargs):
         super(SlidingWindowAgent, self).__init__(config, **kwargs)
         
-        base_store_path = getattr(config, "sw_store_path", "sw_store.json")
-        job_id = os.environ.get("SLURM_JOB_ID")
-        if job_id:
-            name, ext = os.path.splitext(base_store_path)
-            self.sw_store_path = f"{name}_{job_id}{ext}"
-        else:
-            self.sw_store_path = base_store_path
-        
+        self.sw_store_path = getattr(self, "sw_store_path", "sw_store.json")
         self.sw_store = SlidingWindowStore()
         
         if os.path.exists(self.sw_store_path):
@@ -32,7 +25,13 @@ class SlidingWindowAgent(PromptAgent):
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align SW storage with the run's experiment folder."""
-        self.sw_store_path = os.path.join(storage_dir, os.path.basename(self.sw_store_path))
+        base = os.path.basename(self.sw_store_path)
+        if getattr(self, 'memory_mode', 'combined') == 'separate':
+            pid = getattr(self, 'player_id', 'pX')
+            if f"_{pid}.json" not in base:
+                base = base.replace(".json", f"_{pid}.json")
+                
+        self.sw_store_path = os.path.join(storage_dir, base)
         if os.path.exists(self.sw_store_path):
             self.sw_store.load(self.sw_store_path)
 
@@ -62,7 +61,7 @@ class SlidingWindowAgent(PromptAgent):
                 notes_text=current_notes
             )
             from gamingbench.prompts.observation_prompts import construct_game_intro
-            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
+            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
             observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
             
         return system_prompt, observation_prompt

@@ -19,7 +19,8 @@ except ImportError:
 class ReasoningBankAgent(PromptAgent):
     def __init__(self, config, **kwargs):
         super(ReasoningBankAgent, self).__init__(config, **kwargs)
-        self.memory_bank_path = getattr(config, "memory_bank_path", "reasoning_bank.json")
+        self.memory_bank_path = getattr(self, "memory_bank_path", "reasoning_bank.json")
+            
         self.num_memories = getattr(config, "num_memories", 3)
         self.max_bank_size = getattr(config, "max_bank_size", 50)
         
@@ -30,10 +31,17 @@ class ReasoningBankAgent(PromptAgent):
         self.memory_bank: List[Dict] = []
         self.current_memories: List[Dict] = []
         self._faiss_index = None
+        self.hive_mode = getattr(config, 'hive_mode', False)
 
     def set_storage_dir(self, storage_dir):
-        """Called by openspiel_adapter to align storage with the run's experiment folder."""
-        self.memory_bank_path = os.path.join(storage_dir, os.path.basename(self.memory_bank_path))
+        """Called by main.py to align bank storage with the run's experiment folder."""
+        base = os.path.basename(self.memory_bank_path)
+        if getattr(self, 'memory_mode', 'combined') == 'separate':
+            pid = getattr(self, 'player_id', 'pX')
+            if f"_{pid}.json" not in base:
+                base = base.replace(".json", f"_{pid}.json")
+                
+        self.memory_bank_path = os.path.join(storage_dir, base)
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -115,7 +123,23 @@ class ReasoningBankAgent(PromptAgent):
     def _build_prompts(self, observations):
         system_prompt, observation_prompt = super()._build_prompts(observations)
         
+        # Failsafe: In Hive mode, both agents share the exact same store_paths. 
+        # If Player 1's in-memory memory is empty due to batch cloning skips, reload from disk.
+        if not self.memory_bank and getattr(self, 'hive_mode', False) and getattr(self, 'memory_bank_path', None):
+            if os.path.exists(self.memory_bank_path):
+                self._load_memory_bank()
+                # Re-retrieve memories for the current game_intro since we missed it in reset_game_state
+                game_intro = getattr(self, 'current_game_intro', "")
+                self.current_memories = self._retrieve_memories(game_intro)
+                
         memories_block = self._format_memories_block()
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_MEMORY_NOTICE
+            if memories_block:
+                memories_block = HIVE_MEMORY_NOTICE + "\n\n" + memories_block
+            else:
+                memories_block = HIVE_MEMORY_NOTICE
+                
         if memories_block:
             # Inject memory block after the game rules/intro
             # Usually the game intro is at the top of the observation_prompt
@@ -217,16 +241,18 @@ class ReasoningBankAgent(PromptAgent):
             return "", None
 
     def post_game_update(self, game_history: str, final_board_state: str, env_name: str):
-        # Determine if we won
-        # Look for "Your score=X, Opponent score=Y"
-        score_pattern = r"Your score=([-\d.]+), Opponent score=([-\d.]+)"
-        matches = list(re.finditer(score_pattern, game_history))
+        # Look for "Your score=X, Opponent score=Y" or "Cooperative final score"
         won = False
-        if matches:
-            last_match = matches[-1]
-            my_score = float(last_match.group(1))
-            opp_score = float(last_match.group(2))
+        match = re.search(r"Your score=([-\d.]+),\s*Opponent score=([-\d.]+)", game_history)
+        coop_match = re.search(r"Cooperative final score = ([-\d.]+)", game_history)
+        
+        if match:
+            my_score = float(match.group(1))
+            opp_score = float(match.group(2))
             won = (my_score > opp_score)
+        elif coop_match:
+            score = float(coop_match.group(1))
+            won = score > 0
             
         result = {
             "trajectory": self.current_trajectory.copy(),
@@ -253,6 +279,10 @@ class ReasoningBankAgent(PromptAgent):
         won = result["won"]
         env_name = result["env_name"]
         game_intro = result["game_intro"]
+        
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_UPDATE_NOTICE
+            game_intro = HIVE_UPDATE_NOTICE + "\n\n" + game_intro
         
         system_msg = SUCCESSFUL_MEMORY_SI if won else FAILED_MEMORY_SI
         user_msg = f"Game: {env_name}\n\nGame Introduction:\n{game_intro}\n\nFull Game Trajectory:\n{trajectory_text}"

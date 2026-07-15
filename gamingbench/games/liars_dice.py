@@ -8,7 +8,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 
 
 class LiarsDice(OpenSpielGame):
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("liars_dice")
         pass
 

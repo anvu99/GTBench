@@ -6,7 +6,7 @@ from gamingbench.agents.base_agent import BaseAgent
 class RandomAgent(BaseAgent):
 
     def __init__(self, config, **kwargs):
-        super(RandomAgent, self).__init__(config)
+        super(RandomAgent, self).__init__(config, **kwargs)
 
     def step(self, observations):
         agent_action_list = observations['legal_moves']

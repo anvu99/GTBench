@@ -34,6 +34,9 @@ def get_step_env_regex_and_format(env_name):
     elif env_name == 'python_iterated_prisoners_dilemma':
         regex = '(<Testify>|<Silent>)'
         format = '<Testify|Silent>, e.g., <Testify>, <Silent>'
+    elif env_name == 'hanabi':
+        regex = r'(<(?:PLAY|DISCARD) \d+>|<HINT PLAYER \d+ (?:COLOR [A-Za-z]+|RANK \d+)>)'
+        format = '<PLAY N>, <DISCARD N>, <HINT PLAYER N COLOR Color>, or <HINT PLAYER N RANK N>'
     else:
         raise NotImplementedError
     return regex, format

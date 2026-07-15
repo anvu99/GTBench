@@ -42,6 +42,7 @@ Your goal is to compare the agent's in-game observations against the GROUND TRUT
 
 --- ✅ MATCH GROUND TRUTH (Full History) ---
 These are the confirmed, objective move-by-move outcomes. Use these as the authoritative ground truth.
+Note: The evaluated agent's own moves and identity are labeled as 'You' in both the GROUND TRUTH history and their window summaries.
 
 Reading the history:
 {game_history_legend}
@@ -184,7 +185,7 @@ Your role is Synthesizer. You MUST execute your task in a strict 2-step process.
 
 STEP 1: GRAVEYARD MANAGEMENT
 First, manage any [GRAVEYARD PROPOSAL] entries from the gradient reports.
-1. Cluster & Quorum: Group all conceptually identical [GRAVEYARD PROPOSAL]s from the reports. A cluster MUST contain at least 2 proposals to meet the quorum. Ignore any proposals that do not meet quorum.
+1. Cluster & Quorum: Group all conceptually identical [GRAVEYARD PROPOSAL]s from the reports. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. A cluster MUST contain at least 2 proposals to meet the quorum. Ignore any proposals that do not meet quorum.
 2. Consolidate: Merge the components of each valid cluster into a single Graveyard Proposal.
 3. Merge with Existing: Compare the consolidated proposal against the existing "--- GRAVEYARD OF FAILED STRATEGIES ---" (located at the bottom of the current database, if it exists). If an entry with the same underlying description exists, merge them by combining their Policy Flaw lists (ensuring no historical flaws are deleted). Otherwise, prepare to append it as a new entry.
 
@@ -203,8 +204,8 @@ Note: each gradient entry includes a Reason field for your context. Use the Reas
 --- BATCH QUORUM RULES (apply when {n} > 1) ---
 1. **[REMOVE] Threshold**: A signal MUST receive a [REMOVE] instruction in at least 3 games to be removed. If it appears in <3 games, IGNORE the remove instruction entirely.
 2. **[MERGE], [KEEP] Threshold**: These instructions MUST apply to the EXACT same existing signal name in at least 2 games to be executed. If they appear in only 1 game, IGNORE them entirely.
-3. **[MODIFY] Threshold**: For an existing signal to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same signal met the quorum and are accepted).
-4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
+3. **[MODIFY] Threshold**: For an existing signal to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same signal met the quorum and are accepted).
+4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum, ignoring differences in their headers or names. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
 5. **NO AUTONOMOUS MERGING**: You are STRICTLY FORBIDDEN from merging signals on your own. You may only execute a [MERGE] if it was explicitly issued by the gradient reports in at least 2 games. It is better to have multiple specific signals with good policies than 1 abstract signal.
 
 --- BATCH RECONCILIATION RULES (apply when {n} > 1 and quorum is met) ---
@@ -238,6 +239,9 @@ You MUST output the full Graveyard section at the very bottom of your output (ca
 
 Write ONLY the full updated memory and graveyard. Do not include any pleasantries or conversational filler.
 If no memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.
+If the final synthesized database is completely empty (i.e., no signals are currently stored), you MUST output exactly:
+(No signals currently stored)
+Do not output any explanation, reasoning, or other text when the database is empty.
 """
 
 SELF_LTM_INJECTION_PROMPT = """\
@@ -264,9 +268,13 @@ Each entry describes a behavioral pattern you have repeatedly exhibited across p
 
 SELF_GRADIENT_ENGINE_PROMPT = """\
 You are an advanced strategy analyzer evaluating an agent's performance in a completed game.
+The agent you are evaluating played as: {agent_id}
+
 Your goal is to compare the agent's in-game decisions against the GROUND TRUTH game history and produce a structured self-gradient report for the agent's own Self-Reputation Database.
 
 --- ✅ MATCH GROUND TRUTH (Full History) ---
+Note: Your own moves and identity are labeled as 'You' in both the GROUND TRUTH history and your window summaries.
+
 {game_history_legend}
 - [Chat]: Chat message sent that turn (if chat is enabled).
 - [Move]: The physical move executed after the position above.
@@ -397,7 +405,7 @@ Your role is Synthesizer. You MUST execute your task in a strict 2-step process.
 
 STEP 1: GRAVEYARD MANAGEMENT
 First, manage any [GRAVEYARD PROPOSAL] entries from the self-gradient reports.
-1. Cluster & Quorum: Group all conceptually identical [GRAVEYARD PROPOSAL]s from the reports. A cluster MUST contain at least 2 proposals to meet the quorum. Ignore any proposals that do not meet quorum.
+1. Cluster & Quorum: Group all conceptually identical [GRAVEYARD PROPOSAL]s from the reports. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. A cluster MUST contain at least 2 proposals to meet the quorum. Ignore any proposals that do not meet quorum.
 2. Consolidate: Merge the components of each valid cluster into a single Graveyard Proposal.
 3. Merge with Existing: Compare the consolidated proposal against the existing "--- GRAVEYARD OF FAILED STRATEGIES ---" (located at the bottom of the current self-database, if it exists). If an entry with the same underlying description exists, merge them by combining their Verification Flaw lists (ensuring no historical flaws are deleted). Otherwise, prepare to append it as a new entry.
 
@@ -415,8 +423,8 @@ Second, update the main Self-Reputation Database by applying the standard self-g
 --- BATCH QUORUM RULES (apply when {n} > 1) ---
 1. **[REMOVE] Threshold**: A signal MUST receive a [REMOVE] instruction in at least 3 games to be removed. If it appears in <3 games, IGNORE the remove instruction entirely.
 2. **[MERGE], [KEEP] Threshold**: These instructions MUST apply to the EXACT same existing signal name in at least 2 games to be executed. If they appear in only 1 game, IGNORE them entirely.
-3. **[MODIFY] Threshold**: For an existing signal to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same signal met the quorum and are accepted).
-4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
+3. **[MODIFY] Threshold**: For an existing signal to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same signal met the quorum and are accepted).
+4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum, ignoring differences in their headers or names. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
 5. **NO AUTONOMOUS MERGING**: You are STRICTLY FORBIDDEN from merging signals on your own. You may only execute a [MERGE] if it was explicitly issued by the gradient reports in at least 2 games. It is better to have multiple specific signals with good Verification checks than 1 abstract signal.
 
 --- BATCH RECONCILIATION RULES (apply when {n} > 1 and quorum is met) ---
@@ -451,4 +459,17 @@ You MUST output the full Graveyard section at the very bottom of your output (ca
 
 Write ONLY the full updated self-memory and graveyard. Do not include any pleasantries or conversational filler.
 If no self-memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.
+If the final synthesized database is completely empty (i.e., no signals are currently stored), you MUST output exactly:
+(No signals currently stored)
+Do not output any explanation, reasoning, or other text when the database is empty.
 """
+
+SEPARATE_GRADIENT_ENGINE_PROMPT = GRADIENT_ENGINE_PROMPT.replace(
+    "against a specific opponent.",
+    "against a specific opponent. You are analyzing the game specifically to evaluate the behavior, signaling, and errors of TEAMMATE {peer_id}. Ignore the mistakes of other players. Focus ONLY on extracting insights and updating policies regarding {peer_id}."
+)
+
+SEPARATE_TGD_SYNTHESIS_PROMPT = TGD_SYNTHESIS_PROMPT.replace(
+    "for playing against a specific opponent.",
+    "for playing against a specific opponent. You are analyzing the game specifically to evaluate the behavior, signaling, and errors of TEAMMATE {peer_id}. Focus ONLY on extracting insights and updating policies regarding {peer_id}."
+)

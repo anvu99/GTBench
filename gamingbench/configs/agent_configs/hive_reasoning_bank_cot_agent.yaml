@@ -1,0 +1,11 @@
+agent_name: ReasoningBankCotAgent
+agent_type: ReasoningBankCotAgent
+num_generations: 1
+majority_vote: False
+enable_chat: False
+
+# ReasoningBank Configuration
+memory_bank_path: "reasoning_bank.json"
+num_memories: 3
+max_bank_size: 50
+hive_mode: True

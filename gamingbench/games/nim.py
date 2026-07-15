@@ -8,7 +8,7 @@ import re
 
 
 class Nim(OpenSpielGame):
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("nim")
         pass
 

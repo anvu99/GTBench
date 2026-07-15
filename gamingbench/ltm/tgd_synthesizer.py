@@ -1,4 +1,4 @@
-from gamingbench.ltm.prompts import TGD_SYNTHESIS_PROMPT
+from gamingbench.ltm.prompts import TGD_SYNTHESIS_PROMPT, SEPARATE_TGD_SYNTHESIS_PROMPT
 
 
 def _format_gradient_reports(gradient_reports: list) -> str:
@@ -42,8 +42,43 @@ def run_tgd_synthesis(
         {"role": "user", "content": prompt}
     ]
 
-    from gamingbench.utils.utils import strip_thinking_block
-    generations, _, _ = model.query(messages, n=1, stop=None, prompt_type='move')
-    raw_generation = generations[0]
+    from gamingbench.utils.utils import strip_thinking_block, query_with_thinking_validation
+    raw_generation = query_with_thinking_validation(model, messages, prompt_type='move')
     new_ltm = strip_thinking_block(raw_generation)
-    return new_ltm, raw_generation
+    
+    if not new_ltm.strip():
+        # Keep current state if validation and retries failed
+        return current_ltm, raw_generation, prompt
+        
+    return new_ltm, raw_generation, prompt
+
+def run_separate_tgd_synthesis(
+    model,
+    peer_id: str,
+    game_intro: str,
+    current_ltm: str,
+    gradient_reports: list,
+) -> str:
+    n = len(gradient_reports)
+    formatted_reports = _format_gradient_reports(gradient_reports)
+
+    prompt = game_intro + "\n\n" + SEPARATE_TGD_SYNTHESIS_PROMPT.format(
+        peer_id=peer_id,
+        current_ltm=current_ltm,
+        n=n,
+        gradient_reports=formatted_reports,
+    )
+
+    messages = [
+        {"role": "user", "content": prompt}
+    ]
+
+    from gamingbench.utils.utils import strip_thinking_block, query_with_thinking_validation
+    raw_generation = query_with_thinking_validation(model, messages, prompt_type='move')
+    new_ltm = strip_thinking_block(raw_generation)
+    
+    if not new_ltm.strip():
+        # Keep current state if validation and retries failed
+        return current_ltm, raw_generation, prompt
+        
+    return new_ltm, raw_generation, prompt

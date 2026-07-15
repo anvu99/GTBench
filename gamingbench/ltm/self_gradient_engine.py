@@ -3,6 +3,7 @@ from gamingbench.ltm.prompts import SELF_GRADIENT_ENGINE_PROMPT
 
 def run_self_gradient_engine(
     model,
+    agent_id: str,
     game_intro: str,
     game_history: str,
     window_summaries: str,
@@ -21,6 +22,7 @@ def run_self_gradient_engine(
         Self-TGD Synthesizer.
     """
     prompt = game_intro + "\n\n" + SELF_GRADIENT_ENGINE_PROMPT.format(
+        agent_id=agent_id,
         game_history=game_history,
         window_summaries=window_summaries,
         current_self_ltm=current_self_ltm,
@@ -31,8 +33,11 @@ def run_self_gradient_engine(
         {"role": "user", "content": prompt}
     ]
 
-    from gamingbench.utils.utils import strip_thinking_block
-    generations, _, _ = model.query(messages, n=1, stop=None, prompt_type='move')
-    raw_generation = generations[0]
-    structural_report = strip_thinking_block(raw_generation)
-    return structural_report, raw_generation
+    from gamingbench.utils.utils import strip_thinking_block, query_with_thinking_validation
+    raw_generation = query_with_thinking_validation(model, messages, prompt_type='move')
+    structural_report = strip_thinking_block(raw_generation).strip()
+    
+    if not structural_report:
+        structural_report = "No signals observed."
+        
+    return structural_report, raw_generation, prompt

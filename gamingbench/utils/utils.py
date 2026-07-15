@@ -46,7 +46,7 @@ def get_game_config_path(game):
 def load_game(game_config_path):
     game_config = Box.from_yaml(
         filename=game_config_path, Loader=yaml.FullLoader)
-    return getattr(games, game_config.game_name)()
+    return getattr(games, game_config.game_name)(game_config)
 
 
 def load_config(config_path):
@@ -224,3 +224,29 @@ def remove_game_log_handler(fh: logging.FileHandler) -> None:
     logger = logging.getLogger(__name__)
     logger.removeHandler(fh)
     fh.close()
+
+def query_with_thinking_validation(model, messages, stop=None, prompt_type='move', max_retries=2):
+    """
+    Executes a model query and validates that reasoning models emit thinking tags.
+    If thinking tags are expected but missing, retries up to max_retries.
+    If still missing, returns an empty string to allow graceful fallbacks.
+    """
+    generations, _, _ = model.query(messages, n=1, stop=stop, prompt_type=prompt_type)
+    raw_generation = generations[0]
+    
+    thinking_enabled = getattr(model, 'enable_thinking', False)
+    
+    retries = 0
+    while thinking_enabled and not any(tag in raw_generation for tag in ["<think>", "</think>", "<thought>", "</thought>"]) and retries < max_retries:
+        retries += 1
+        if hasattr(model, 'logger') and model.logger:
+            model.logger.warning(f"Missing thinking tag in generation, retrying ({retries}/{max_retries})...")
+        generations, _, _ = model.query(messages, n=1, stop=stop, prompt_type=prompt_type)
+        raw_generation = generations[0]
+        
+    if thinking_enabled and not any(tag in raw_generation for tag in ["<think>", "</think>", "<thought>", "</thought>"]):
+        if hasattr(model, 'logger') and model.logger:
+            model.logger.error("Failed to generate thinking tags after retries. Returning empty string.")
+        return ""
+        
+    return raw_generation

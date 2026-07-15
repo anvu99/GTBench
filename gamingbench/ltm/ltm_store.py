@@ -31,8 +31,11 @@ class LTMStore:
         and the legacy format {opponent_name: ltm_text}.
         """
         if os.path.exists(filepath):
-            with open(filepath, "r") as f:
-                data = json.load(f)
+            try:
+                with open(filepath, "r") as f:
+                    data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
             # Detect legacy format: values are strings, not dicts
             if data and all(isinstance(v, str) for v in data.values()):
                 self.store = data

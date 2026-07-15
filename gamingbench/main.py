@@ -1,4 +1,5 @@
 import copy
+import logging
 import os.path
 import argparse
 import pathlib
@@ -10,7 +11,7 @@ import json
 
 games = ['tictactoe', 'connect4', 'texasholdem', 'neuron_poker', 'backgammon', 'breakthrough',
          'first_sealed_auction', 'gin_rummy', 'liars_dice', 'negotiation', 'nim', 'pig', 'kuhn_poker',
-         'prisoners_dilemma', 'cooperative_negotiation']
+         'prisoners_dilemma', 'cooperative_negotiation', 'hanabi', 'hanabi-micro', 'hanabi-small', 'hanabi3-micro', 'hanabi-small-custom']
 
 
 def get_args():
@@ -45,6 +46,7 @@ def get_args():
     parser.add_argument('--threshold-matches', default=50, type=int)
     parser.add_argument('--enable-chat', default=False, action='store_true', help='Enable chat feature for agents')
     parser.add_argument('--think-further', default=False, action='store_true', help='Instruct agent to think multiple steps ahead')
+    parser.add_argument('--n-player-memory-mode', type=str, default='combined', choices=['combined', 'separate'], help='Memory mode for N-player cooperative games')
     parser.add_argument('--batch-size', type=int, default=1,
                         help='Number of games per LTM update batch. Default 1 = update after every game (existing behaviour).')
     args = parser.parse_args()
@@ -67,6 +69,10 @@ def _get_memory_snapshot(agent):
         }
         if hasattr(agent, 'self_ltm_store'):
             snap['self_ltm'] = dict(agent.self_ltm_store.store)
+        if hasattr(agent, 'partner_ltm_store') and hasattr(agent, 'partner_ltm_store_path') and agent.partner_ltm_store_path:
+            if os.path.exists(agent.partner_ltm_store_path):
+                agent.partner_ltm_store.load(agent.partner_ltm_store_path)
+            snap['partner_ltm'] = dict(agent.partner_ltm_store.store)
         return snap
     elif hasattr(agent, 'rules') and hasattr(agent, 'experience_pool'):
         return {
@@ -97,6 +103,9 @@ def _restore_memory_snapshot(clone, snapshot):
             clone.ltm_store.store = dict(snapshot['ltm'])
         if hasattr(clone, 'self_ltm_store'):
             clone.self_ltm_store.store = dict(snapshot.get('self_ltm', {}))
+        if 'partner_ltm' in snapshot and hasattr(clone, 'partner_ltm_store'):
+            clone.partner_ltm_store.store = dict(snapshot['partner_ltm'])
+            clone.partner_ltm_store_path = '/dev/null'
         clone.ltm_store_path = '/dev/null'
         clone.self_ltm_store_path = '/dev/null'
     if hasattr(clone, 'rules') and hasattr(clone, 'experience_pool'):
@@ -125,6 +134,10 @@ def clone_agent_for_batch(original_agent, memory_snapshot: dict):
     return clone
 
 def run_game(game_name):
+    game_config = utils.load_config(os.path.join(args.game_config_root, f'{game_name}.yaml'))
+    if getattr(game_config, 'num_players', 2) > 2 or len(args.agent_configs) > 2:
+        return run_game_nplayer(game_name)
+
     log_root = args.exp_root
     pathlib.Path(log_root).mkdir(parents=True, exist_ok=True)
     agent_names = [a.split('/')[-1].split('.')[0] for a in args.agent_configs]
@@ -148,34 +161,34 @@ def run_game(game_name):
         os.path.join(args.game_config_root, f'{game_name}.yaml')))
 
     # initialize agents
-    agents = [utils.load_agent(config_path, game=game.game)
+    agents = [utils.load_agent(config_path, game=game.game, game_config=game.config)
               for config_path in args.agent_configs]
     models = [utils.load_model(config_path)
               for config_path in args.model_configs]
 
-    for a, m in zip(agents, models):
+    for i, (a, m) in enumerate(zip(agents, models)):
         a.set_model(m)
+        a.player_id = f"p{i}"
         a.enable_chat = getattr(args, 'enable_chat', False)
         a.think_further = getattr(args, 'think_further', False)
+        a.memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
-    # exchange first player to mitigate first-player advantage
-    reversed_agent_configs = copy.deepcopy(args.agent_configs)
-    reversed_agent_configs.reverse()
-    reversed_agents = [utils.load_agent(
-        config_path, game=game.game) for config_path in reversed_agent_configs]
-    reversed_model_configs = copy.deepcopy(args.model_configs)
-    reversed_model_configs.reverse()
-    reversed_models = [utils.load_model(config_path)
-                       for config_path in reversed_model_configs]
+    if len(agents) == 2:
+        a0, a1 = agents[0], agents[1]
+        if (getattr(a0, 'hive_mode', False) and hasattr(a0, 'set_partner_store')
+                and getattr(a1, 'hive_mode', False) and hasattr(a1, 'set_partner_store')):
+            if hasattr(a0, 'agent_name') and hasattr(a1, 'agent_name') and a0.agent_name == a1.agent_name:
+                key_a0 = a0.agent_name
+                key_a1 = a1.agent_name
+            else:
+                key_a0 = f"{a0.player_id}:{a0.agent_name}_{models[0].nick_name}"
+                key_a1 = f"{a1.player_id}:{a1.agent_name}_{models[1].nick_name}"
+            a0.set_partner_store(a1.ltm_store_path, key_a0)
+            a1.set_partner_store(a0.ltm_store_path, key_a1)
 
-    for a, m in zip(reversed_agents, reversed_models):
-        a.set_model(m)
-        a.enable_chat = getattr(args, 'enable_chat', False)
-        a.think_further = getattr(args, 'think_further', False)
-        if hasattr(a, 'set_storage_dir'):
-            a.set_storage_dir(log_root)
+
 
     for config_path in args.model_configs:
         game_env.append_models_config(utils.load_config(config_path))
@@ -225,19 +238,7 @@ def run_game(game_name):
                     else:
                         fresh_agents.append(copy.deepcopy(a))
 
-                fresh_reversed = []
-                for a in reversed_agents:
-                    if hasattr(a, 'flush_batch_updates'):
-                        store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None)))))
-                        snap = memory_snapshots.get(store_path, _get_memory_snapshot(a))
-                        fresh_reversed.append(clone_agent_for_batch(a, snap))
-                    else:
-                        fresh_reversed.append(copy.deepcopy(a))
                 for fa, m in zip(fresh_agents, models):
-                    fa.set_model(m)
-                    fa.enable_chat = getattr(args, 'enable_chat', False)
-                    fa.think_further = getattr(args, 'think_further', False)
-                for fa, m in zip(fresh_reversed, reversed_models):
                     fa.set_model(m)
                     fa.enable_chat = getattr(args, 'enable_chat', False)
                     fa.think_further = getattr(args, 'think_further', False)
@@ -246,9 +247,7 @@ def run_game(game_name):
                     'match_idx': match_idx,
                     'game_name': game_name,
                     'agents': fresh_agents,
-                    'reversed_agents': fresh_reversed,
                     'models': models,
-                    'reversed_models': reversed_models,
                     'result_path': result_path,
                     'args': args,
                     'lock': lock,
@@ -269,30 +268,33 @@ def run_game(game_name):
 
             # Flush: single unified synthesis + EMA for all N games
             if gradient_data and batch_agents:
-                # Borrow opponent context (current_opponent_key / game_intro) from
-                # the first successful clone that actually played.
-                # Must check BOTH 'agents' and 'reversed_agents' because odd matches
-                # (exchange_first_player) run with reversed_agents.
-                for ba in batch_args:
-                    sample = next(
-                        (a for a in ba['agents'] + ba['reversed_agents']
-                         if hasattr(a, 'current_opponent_key') and a.current_opponent_key),
-                        None
-                    )
-                    if sample:
-                        for batch_agent in batch_agents:
-                            batch_agent.current_opponent_key = sample.current_opponent_key
-                            batch_agent.current_game_intro  = sample.current_game_intro
-                            batch_agent.current_game_name = game_name
-                        break
-                from gamingbench.prompts.observation_prompts import construct_game_intro
+                # Borrow opponent context (current_game_intro) from the first successful clone
+                # that actually played to pass it to the base agent for context.
                 for batch_agent in batch_agents:
-                    batch_agent.current_game_name = game_name
                     if not getattr(batch_agent, 'current_game_intro', None):
-                        batch_agent.current_game_intro = construct_game_intro(game_name)
+                        sample = next(
+                            (a for ba in batch_args for a in ba['agents'] if hasattr(a, 'current_game_intro') and a.current_game_intro),
+                            None
+                        )
+                        if sample:
+                            for batch_agent_inner in batch_agents:
+                                batch_agent_inner.current_game_intro  = sample.current_game_intro
+                                batch_agent_inner.current_game_name = game_name
+                            break
+                from gamingbench.prompts.observation_prompts import construct_game_intro
+                flushed_paths = set()
+                for batch_agent in batch_agents:
+                    batch_agent.current_game_name = game_name.lower()
+                    if not getattr(batch_agent, 'current_game_intro', None):
+                        batch_agent.current_game_intro = construct_game_intro(game_name, game_config=game.config)
                     store_path = getattr(batch_agent, 'ew_store_path', getattr(batch_agent, 'sw_store_path', getattr(batch_agent, 'ltm_store_path', getattr(batch_agent, 'rules_store_path', getattr(batch_agent, 'memory_bank_path', None)))))
+                    
+                    if store_path in flushed_paths:
+                        continue
+                    
                     agent_data = [d for p_path, d in gradient_data if p_path == store_path]
                     if agent_data:
+                        flushed_paths.add(store_path)
                         batch_agent.flush_batch_updates(agent_data)
 
         results = [r[0] for r in results]
@@ -304,9 +306,7 @@ def run_game(game_name):
                 'match_idx': match_idx,
                 'game_name': game_name,
                 'agents': agents,
-                'reversed_agents': reversed_agents,
                 'models': models,
-                'reversed_models': reversed_models,
                 'result_path': result_path,
                 'args': args,
                 'lock': lock
@@ -319,9 +319,7 @@ def run_game(game_name):
                 'match_idx': match_idx,
                 'game_name': game_name,
                 'models': models,
-                'reversed_models': reversed_models,
                 'agents': agents,
-                'reversed_agents': reversed_agents,
                 'result_path': result_path,
                 'args': args,
                 'lock': lock
@@ -353,9 +351,7 @@ def run_match(params):
     match_idx = params['match_idx']
     game_name = params['game_name']
     agents = params['agents']
-    reversed_agents = params['reversed_agents']
     models = params['models']
-    reversed_models = params['reversed_models']
     result_path = params['result_path']
 
     args = params['args']
@@ -367,28 +363,14 @@ def run_match(params):
 
     game_env.set_game(game)
 
-    if args.exchange_first_player and match_idx % 2 == 1:
-        # exchange first player
-        game_env.set_agents(reversed_agents)
-        game_env.set_models(reversed_models)
-        reversed_agent_configs = copy.deepcopy(args.agent_configs)
-        reversed_agent_configs.reverse()
-        for config_path in reversed_agent_configs:
-            game_env.append_agents_config(utils.load_config(config_path))
+    game_env.set_agents(agents)
+    game_env.set_models(models)
 
-        reversed_model_configs = copy.deepcopy(args.model_configs)
-        reversed_model_configs.reverse()
-        for config_path in reversed_model_configs:
-            game_env.append_models_config(utils.load_config(config_path))
-    else:
-        game_env.set_agents(agents)
-        game_env.set_models(models)
+    for config_path in args.agent_configs:
+        game_env.append_agents_config(utils.load_config(config_path))
 
-        for config_path in args.agent_configs:
-            game_env.append_agents_config(utils.load_config(config_path))
-
-        for config_path in args.model_configs:
-            game_env.append_models_config(utils.load_config(config_path))
+    for config_path in args.model_configs:
+        game_env.append_models_config(utils.load_config(config_path))
 
     # ── Per-game log file ────────────────────────────────────────────────────
     # e.g. ltm_agent_gemini-3_prompt_agent_gemini-3_game_0003.log
@@ -400,7 +382,8 @@ def run_match(params):
     game_log_handler = utils.add_game_log_handler(per_game_log)
 
     try:
-        game_env.play()
+        first_player = 1 if (args.exchange_first_player and match_idx % 2 == 1) else 0
+        game_env.play(first_player=first_player)
         res = game_env.history_tracker.to_dict()
     finally:
         utils.remove_game_log_handler(game_log_handler)
@@ -415,7 +398,7 @@ def run_match(params):
     # the _last_batch_result, not the one in agents.
     batch_queue = params.get('batch_queue')
     if batch_queue is not None:
-        all_agents_in_match = list(params.get('agents', [])) + list(params.get('reversed_agents', []))
+        all_agents_in_match = list(params.get('agents', []))
         for agent in all_agents_in_match:
             if getattr(agent, 'batch_mode', False) and agent._last_batch_result is not None:
                 batch_queue.put((getattr(agent, '_parent_store_path', None), agent._last_batch_result))
@@ -424,6 +407,335 @@ def run_match(params):
     return (res, params)
 
 
+
+def run_match_nplayer(params):
+    match_idx = params['match_idx']
+    game_name = params['game_name']
+    result_path = params['result_path']
+    lock = params['lock']
+    args = params['args']
+    log_root = params['log_root']
+
+    game_env = BaseGameEnv()
+    game = utils.load_game(os.path.join(args.game_config_root, f'{game_name}.yaml'))
+    game_env.save_game_config(utils.load_config(os.path.join(args.game_config_root, f'{game_name}.yaml')))
+
+    agents = params['agents']
+    models = params['models']
+
+    # Wait, run_game_nplayer will initialize models and set them on agents!
+    # BUT run_match clones agents but sets their models again. Let's keep it safe.
+    for a, m in zip(agents, models):
+        a.set_model(m)
+        a.enable_chat = getattr(args, 'enable_chat', False)
+        a.think_further = getattr(args, 'think_further', False)
+
+    # Note: args.agent_configs and args.model_configs might not be correct if we duplicate agents.
+    # In batch mode, we don't strictly need to append them to game_env if they are already in game_env,
+    # but we will just pass them.
+    for a_config in params.get('agent_configs', []):
+        game_env.append_agents_config(utils.load_config(a_config))
+        
+    for m_config in params.get('model_configs', []):
+        game_env.append_models_config(utils.load_config(m_config))
+
+    game_env.set_game(game)
+
+    # ── Per-game log file ────────────────────────────────────────────────────
+    run_name = os.path.splitext(os.path.basename(result_path))[0]
+    per_game_log = os.path.join(
+        os.path.dirname(result_path),
+        f'{run_name}_game_{match_idx:04d}.log'
+    )
+    game_log_handler = utils.add_game_log_handler(per_game_log)
+    logger = logging.getLogger('gamingbench.utils.utils')
+    
+    logger.info(f'Game {match_idx} starts')
+    for a in agents:
+        a.logger = logger
+    game_env.logger = logger
+    if hasattr(game_env, 'game') and hasattr(game_env.game, 'logger'):
+        game_env.game.logger = logger
+
+    # Initialize agent memory tracking
+    from gamingbench.prompts.observation_prompts import construct_game_intro
+    for i, agent in enumerate(agents):
+        if hasattr(agent, 'reset_game_state'):
+            game_intro = construct_game_intro(game_name, enable_chat=getattr(agent, 'enable_chat', False), game_config=game_env.game.config)
+            opponent_keys = []
+            for j, other_agent in enumerate(agents):
+                if i != j:
+                    if hasattr(agent, 'agent_name') and hasattr(other_agent, 'agent_name') and agent.agent_name == other_agent.agent_name:
+                        opponent_keys.append(other_agent.agent_name)
+                    else:
+                        player_id = getattr(other_agent, 'player_id', f"p{j}")
+                        opponent_keys.append(f"{player_id}:{other_agent.agent_name}_{models[j].nick_name}")
+            
+            memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
+            if memory_mode == 'combined':
+                agent.reset_game_state("+".join(sorted(opponent_keys)), game_intro)
+            else:
+                agent.reset_game_state(sorted(opponent_keys), game_intro)
+
+    try:
+        from gamingbench.utils.history_tracker import HistoryTracker
+        tracker = HistoryTracker()
+        game_env.game.play(agents, models, tracker, seat_mapping=params.get('seat_mapping'))
+        logger.info(f'Game {match_idx} ends')
+        logger.info(tracker.matches[-1].to_dict())
+
+        match_dict = tracker.matches[-1].to_dict()
+        match_dict['match_idx'] = match_idx
+
+        with lock:
+            with open(result_path, 'a') as f:
+                f.write(json.dumps(match_dict) + '\n')
+
+    finally:
+        utils.remove_game_log_handler(game_log_handler)
+        
+    # ── Batch mode: deposit gradient data into the shared queue ──────────────
+    batch_queue = params.get('batch_queue')
+    if batch_queue is not None:
+        all_agents_in_match = list(params.get('agents', []))
+        for agent in all_agents_in_match:
+            if getattr(agent, 'batch_mode', False) and agent._last_batch_result is not None:
+                batch_queue.put((getattr(agent, '_parent_store_path', None), agent._last_batch_result))
+                agent._last_batch_result = None
+
+    return match_dict
+
+def run_game_nplayer(game_name):
+    game_config = utils.load_config(os.path.join(args.game_config_root, f'{game_name}.yaml'))
+    num_players = getattr(game_config, 'num_players', 2)
+
+    agent_configs = list(args.agent_configs)
+    model_configs = list(args.model_configs)
+    
+    # Expand configs if num_players > provided configs
+    while len(agent_configs) < num_players:
+        agent_configs.append(agent_configs[-1])
+    while len(model_configs) < num_players:
+        model_configs.append(model_configs[-1])
+
+    log_root = args.exp_root
+    pathlib.Path(log_root).mkdir(parents=True, exist_ok=True)
+    
+    agent_names = [a.split('/')[-1].split('.')[0] for a in agent_configs]
+    model_names = [m.split('/')[-1].split('.')[0] for m in model_configs]
+
+    # Run name joins all agents
+    parts = []
+    for a, m in zip(agent_names, model_names):
+        parts.append(f"{a}_{m}")
+    run_name = "_".join(parts)
+
+    log_path = os.path.join(log_root, run_name + '.log')
+    logger = utils.LLMBenchLogger(log_path)
+    result_path = os.path.join(log_root, run_name + '.jsonl')
+
+    if not os.path.exists(result_path):
+        with open(result_path, 'w') as file:
+            pass
+
+    game = utils.load_game(os.path.join(args.game_config_root, f'{game_name}.yaml'))
+    agents = [utils.load_agent(config_path, game=game.game, game_config=game.config) for config_path in agent_configs]
+    models = [utils.load_model(config_path) for config_path in model_configs]
+
+    for i, (a, m) in enumerate(zip(agents, models)):
+        a.set_model(m)
+        a.player_id = f"p{i}"
+        a.enable_chat = getattr(args, 'enable_chat', False)
+        a.think_further = getattr(args, 'think_further', False)
+        a.memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
+        if hasattr(a, 'set_storage_dir'):
+            a.set_storage_dir(log_root)
+
+    if len(agents) == 2:
+        a0, a1 = agents[0], agents[1]
+        if (getattr(a0, 'hive_mode', False) and hasattr(a0, 'set_partner_store')
+                and getattr(a1, 'hive_mode', False) and hasattr(a1, 'set_partner_store')):
+            if hasattr(a0, 'agent_name') and hasattr(a1, 'agent_name') and a0.agent_name == a1.agent_name:
+                key_a0 = a0.agent_name
+                key_a1 = a1.agent_name
+            else:
+                key_a0 = f"{a0.player_id}:{a0.agent_name}_{models[0].nick_name}"
+                key_a1 = f"{a1.player_id}:{a1.agent_name}_{models[1].nick_name}"
+            a0.set_partner_store(a1.ltm_store_path, key_a0)
+            a1.set_partner_store(a0.ltm_store_path, key_a1)
+
+    lock = threading.Lock()
+    batch_size = getattr(args, 'batch_size', 1)
+    
+    if batch_size > 1:
+        # ── Batch mode ────────────────────────────────────────────────────────
+        seen_store_paths = set()
+        batch_agents = []
+        for a in agents:
+            if hasattr(a, 'flush_batch_updates'):
+                store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None)))))
+                if store_path and store_path not in seen_store_paths:
+                    seen_store_paths.add(store_path)
+                    batch_agents.append(a)
+        results = []
+        for batch_start in range(0, args.num_matches, batch_size):
+            batch_end = min(batch_start + batch_size, args.num_matches)
+            batch_q = queue.Queue()  # thread-safe gradient data collector
+
+            memory_snapshots = {
+                getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None))))): _get_memory_snapshot(a) 
+                for a in batch_agents
+            }
+
+            batch_args = []
+            for match_idx in range(batch_start, batch_end):
+                fresh_agents = []
+                for a in agents:
+                    if hasattr(a, 'flush_batch_updates'):
+                        store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None)))))
+                        snap = memory_snapshots.get(store_path, _get_memory_snapshot(a))
+                        fresh_agents.append(clone_agent_for_batch(a, snap))
+                    else:
+                        fresh_agents.append(copy.deepcopy(a))
+
+                if getattr(args, 'exchange_first_player', False):
+                    import itertools
+                    perms = list(itertools.permutations(range(num_players)))
+                    p = list(perms[match_idx % len(perms)])
+                else:
+                    p = list(range(num_players))
+
+                match_agents = fresh_agents
+                match_models = list(models)
+                match_a_configs = list(agent_configs)
+                match_m_configs = list(model_configs)
+
+                for fa, m in zip(match_agents, match_models):
+                    fa.set_model(m)
+                    fa.enable_chat = getattr(args, 'enable_chat', False)
+                    fa.think_further = getattr(args, 'think_further', False)
+
+                batch_args.append({
+                    'match_idx': match_idx,
+                    'game_name': game_name,
+                    'agents': match_agents,
+                    'models': match_models,
+                    'result_path': result_path,
+                    'args': args,
+                    'lock': lock,
+                    'batch_queue': batch_q,
+                    'agent_configs': match_a_configs,
+                    'model_configs': match_m_configs,
+                    'log_root': log_root,
+                    'seat_mapping': p
+                })
+
+            batch_results = utils.parallel_func(
+                run_match_nplayer, batch_args,
+                num_workers=min(args.num_workers, len(batch_args))
+            )
+            results.extend(batch_results)
+
+            gradient_data = []
+            while not batch_q.empty():
+                gradient_data.append(batch_q.get())
+
+            if gradient_data and batch_agents:
+                for batch_agent in batch_agents:
+                    if not getattr(batch_agent, 'current_game_intro', None):
+                        sample = next(
+                            (a for ba in batch_args for a in ba['agents'] if hasattr(a, 'current_game_intro') and a.current_game_intro),
+                            None
+                        )
+                        if sample:
+                            for batch_agent_inner in batch_agents:
+                                batch_agent_inner.current_game_intro  = sample.current_game_intro
+                                batch_agent_inner.current_game_name = game_name
+                            break
+                from gamingbench.prompts.observation_prompts import construct_game_intro
+                flushed_paths = set()
+                for batch_agent in batch_agents:
+                    batch_agent.current_game_name = game_name.lower()
+                    if not getattr(batch_agent, 'current_game_intro', None):
+                        # game config is not easily accessible here? We need game.config
+                        batch_agent.current_game_intro = construct_game_intro(game_name, game_config=game.config)
+                    store_path = getattr(batch_agent, 'ew_store_path', getattr(batch_agent, 'sw_store_path', getattr(batch_agent, 'ltm_store_path', getattr(batch_agent, 'rules_store_path', getattr(batch_agent, 'memory_bank_path', None)))))
+                    
+                    if store_path in flushed_paths:
+                        continue
+                        
+                    agent_data = [d for p_path, d in gradient_data if p_path == store_path]
+                    if agent_data:
+                        flushed_paths.add(store_path)
+                        batch_agent.flush_batch_updates(agent_data)
+
+    elif args.num_workers == 1:
+        for match_idx in range(args.num_matches):
+            if getattr(args, 'exchange_first_player', False):
+                import itertools
+                perms = list(itertools.permutations(range(num_players)))
+                p = list(perms[match_idx % len(perms)])
+            else:
+                p = list(range(num_players))
+                
+            match_agents = agents
+            match_models = models
+            match_a_configs = agent_configs
+            match_m_configs = model_configs
+                
+            match_arg = {
+                'match_idx': match_idx,
+                'game_name': game_name,
+                'agents': match_agents,
+                'models': match_models,
+                'result_path': result_path,
+                'args': args,
+                'lock': lock,
+                'agent_configs': match_a_configs,
+                'model_configs': match_m_configs,
+                'log_root': log_root,
+                'seat_mapping': p
+            }
+            run_match_nplayer(match_arg)
+    else:
+        params_list = []
+        for match_idx in range(args.num_matches):
+            if getattr(args, 'exchange_first_player', False):
+                import itertools
+                perms = list(itertools.permutations(range(num_players)))
+                p = list(perms[match_idx % len(perms)])
+            else:
+                p = list(range(num_players))
+                
+            match_agents = agents
+            match_models = models
+            match_a_configs = agent_configs
+            match_m_configs = model_configs
+                
+            params_list.append({
+                'match_idx': match_idx,
+                'game_name': game_name,
+                'agents': match_agents, # Not safe to share directly but legacy behavior if batch=1 and workers>1
+                'models': match_models,
+                'result_path': result_path,
+                'lock': lock,
+                'args': args,
+                'log_root': log_root,
+                'agent_configs': match_a_configs,
+                'model_configs': match_m_configs,
+                'seat_mapping': p
+            })
+        utils.parallel_func(run_match_nplayer, params_list, num_workers=min(args.num_workers, len(params_list)))
+
+    with open(result_path, 'r') as f:
+        matches = [json.loads(line) for line in f.readlines()]
+
+    scores = [m.get('winner_score', 0) for m in matches]
+    if scores:
+        avg_score = sum(scores) / len(scores)
+        logger.info(f"Average Score: {avg_score}")
+
+    return matches
 
 def main(args):
     if args.api_keys:
@@ -443,4 +755,5 @@ def main(args):
 
 if __name__ == '__main__':
     args = get_args()
-    main(args)
+    for g in args.game_names:
+        run_game(g)

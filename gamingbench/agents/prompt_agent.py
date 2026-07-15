@@ -6,7 +6,7 @@ from gamingbench.prompts.system_prompts import construct_system_prompt
 class PromptAgent(BaseAgent):
 
     def __init__(self, config, **kwargs):
-        super(PromptAgent, self).__init__(config)
+        super(PromptAgent, self).__init__(config, **kwargs)
 
         self.step_prompt_constructor = construct_step_prompt
 
@@ -18,7 +18,7 @@ class PromptAgent(BaseAgent):
         
         enable_chat = getattr(self, 'enable_chat', False)
         observations['chat_enabled'] = enable_chat
-        game_intro = construct_game_intro(env_name, enable_chat=enable_chat)
+        game_intro = construct_game_intro(env_name, enable_chat=enable_chat, game_config=getattr(self, 'game_config', None))
         user_prompt_parts = [game_intro]
         
         chat_context = observations.get('chat_context', '')

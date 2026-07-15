@@ -4,4 +4,4 @@ num_generations: 1
 majority_vote: False
 enable_chat: True
 summarize_every: 3
-ltm_store_path: "ltm_store.json"
+ltm_store_path: "ltm_store_p1.json"

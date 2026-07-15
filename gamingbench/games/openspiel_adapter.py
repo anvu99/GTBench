@@ -16,7 +16,7 @@ import copy
 
 
 class OpenSpielGame:
-    def __init__(self, game_name) -> None:
+    def __init__(self, game_name, config=None) -> None:
         self.game_name = game_name
         self.game = pyspiel.load_game(game_name)
         self.env = self.game.new_initial_state()
@@ -45,9 +45,13 @@ class OpenSpielGame:
         # [LTM Integration] Initialize agent state for tracking
         for i, agent in enumerate(agent_list):
             if hasattr(agent, 'reset_game_state'):
-                game_intro = construct_game_intro(self.game_name, enable_chat=getattr(agent, 'enable_chat', False))
+                game_intro = construct_game_intro(self.game_name, enable_chat=getattr(agent, 'enable_chat', False), game_config=self.config)
                 opponent_idx = 1 - i if len(agent_list) == 2 else 0
-                opponent_name = f"{agent_list[opponent_idx].agent_name}_{model_list[opponent_idx].nick_name}" if len(agent_list) > 1 else "unknown"
+                opponent_agent = agent_list[opponent_idx]
+                if hasattr(agent, 'agent_name') and hasattr(opponent_agent, 'agent_name') and agent.agent_name == opponent_agent.agent_name:
+                    opponent_name = opponent_agent.agent_name
+                else:
+                    opponent_name = f"{opponent_agent.agent_name}_{model_list[opponent_idx].nick_name}" if len(agent_list) > 1 else "unknown"
                 agent.reset_game_state(opponent_name, game_intro)
 
         num_step = 0

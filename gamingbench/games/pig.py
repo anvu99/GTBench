@@ -8,7 +8,7 @@ import pyspiel
 
 
 class Pig(OpenSpielGame):
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("pig")
         self.game = pyspiel.load_game(
             "pig", {'winscore': 20})

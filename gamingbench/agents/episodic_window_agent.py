@@ -14,17 +14,9 @@ class EpisodicWindowAgent(PromptAgent):
 
     def __init__(self, config, **kwargs):
         super(EpisodicWindowAgent, self).__init__(config, **kwargs)
-        
         self.window_size = getattr(config, 'window_size', 10)
-        
-        base_store_path = getattr(config, "ew_store_path", "ew_store.json")
-        job_id = os.environ.get("SLURM_JOB_ID")
-        if job_id:
-            name, ext = os.path.splitext(base_store_path)
-            self.ew_store_path = f"{name}_{job_id}{ext}"
-        else:
-            self.ew_store_path = base_store_path
-        
+        self.ew_store_path = getattr(self, "ew_store_path", "ew_store.json")
+        self.hive_mode = getattr(config, 'hive_mode', False)
         self.ew_store = EpisodicWindowStore()
         
         if os.path.exists(self.ew_store_path):
@@ -39,7 +31,13 @@ class EpisodicWindowAgent(PromptAgent):
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align EW storage with the run's experiment folder."""
-        self.ew_store_path = os.path.join(storage_dir, os.path.basename(self.ew_store_path))
+        base = os.path.basename(self.ew_store_path)
+        if getattr(self, 'memory_mode', 'combined') == 'separate':
+            pid = getattr(self, 'player_id', 'pX')
+            if f"_{pid}.json" not in base:
+                base = base.replace(".json", f"_{pid}.json")
+                
+        self.ew_store_path = os.path.join(storage_dir, base)
         if os.path.exists(self.ew_store_path):
             self.ew_store.load(self.ew_store_path)
 
@@ -58,24 +56,48 @@ class EpisodicWindowAgent(PromptAgent):
     def _build_prompts(self, observations):
         system_prompt, observation_prompt = super()._build_prompts(observations)
         
-        env_name = observations['env_name']
+        obs_env = observations['env_name'].lower()
+        # Use the specific game name (e.g. hanabi-small-custom) if it was set by the master thread
+        env_name = getattr(self, 'current_game_name', obs_env)
+        if not env_name or env_name == 'unknown':
+            env_name = obs_env
+            
         self.current_game_name = env_name
         
         current_notes = self.ew_store.get_notes(env_name)
+        
+        # Failsafe: In Hive mode, both agents share the exact same ew_store_path. 
+        # If Player 1's in-memory notes are empty due to batch cloning skips, reload from disk.
+        if not current_notes and getattr(self, 'hive_mode', False) and getattr(self, 'ew_store_path', None):
+            if os.path.exists(self.ew_store_path):
+                self.ew_store.load(self.ew_store_path)
+                current_notes = self.ew_store.get_notes(env_name)
+                
+        if not current_notes and obs_env != env_name:
+            current_notes = self.ew_store.get_notes(obs_env)
+            
+        ew_injection = ""
         if current_notes:
             ew_injection = EW_INJECTION_PROMPT.format(
                 game_name=env_name,
                 notes_text=current_notes
             )
-            from gamingbench.prompts.observation_prompts import construct_game_intro
-            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
-            observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + ew_injection, 1)
+            
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_MEMORY_NOTICE
+            if ew_injection:
+                ew_injection = HIVE_MEMORY_NOTICE + "\n\n" + ew_injection
+            else:
+                ew_injection = HIVE_MEMORY_NOTICE
+                
+        if ew_injection:
+            observation_prompt = ew_injection + "\n\n" + observation_prompt
             
         return system_prompt, observation_prompt
 
     def post_game_update(self, game_history: str, final_board_state: str = "", env_name: str = 'unknown'):
         """Called at the end of the game."""
-        self.current_game_name = env_name
+        self.current_game_name = env_name.lower()
         
         if self.batch_mode:
             self._last_batch_result = game_history
@@ -93,11 +115,15 @@ class EpisodicWindowAgent(PromptAgent):
         n = len(game_histories)
         self.logger.info(f'-' * 20 + f'Batch EW Flush (N={n})' + '-' * 20)
         
-        env_name = self.current_game_name or "unknown"
+        env_name = (self.current_game_name or "unknown").lower()
         game_intro = getattr(self, 'current_game_intro', "Game rules unavailable.")
         if not game_intro or game_intro == "Game rules unavailable.":
             from gamingbench.prompts.observation_prompts import construct_game_intro
-            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False))
+            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
+            
+        if getattr(self, 'hive_mode', False):
+            from gamingbench.prompts.hive_prompts import HIVE_UPDATE_NOTICE
+            game_intro = HIVE_UPDATE_NOTICE + "\n\n" + game_intro
             
         from gamingbench.utils.utils import strip_thinking_block
         
@@ -110,8 +136,23 @@ class EpisodicWindowAgent(PromptAgent):
             )
             messages = [{"role": "user", "content": obs_prompt}]
             try:
-                generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-                observation = strip_thinking_block(generations[0]).strip()
+                thinking_enabled = getattr(self.model, 'enable_thinking', False)
+                retries = 0
+                while True:
+                    generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                    raw_gen = generations[0]
+                    has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
+                    if not thinking_enabled or has_tag or retries >= 2:
+                        break
+                    retries += 1
+                    self.logger.warning(f"Missing thinking tag in EW endgame observation, retrying ({retries}/2)...")
+                    
+                if thinking_enabled and not has_tag:
+                    self.logger.error("Failed to generate thinking tags for EW observation after retries.")
+                    observation = "Game observation generation failed."
+                else:
+                    observation = strip_thinking_block(raw_gen).strip()
+                    
                 self.ew_store.add_observation(env_name, observation, self.window_size)
                 self.logger.info(f'Game {i+1}/{n} Observation:\n{observation}')
             except Exception as e:
@@ -134,8 +175,23 @@ class EpisodicWindowAgent(PromptAgent):
             )
             messages = [{"role": "user", "content": synthesis_prompt}]
             try:
-                generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-                new_notes = strip_thinking_block(generations[0]).strip()
+                thinking_enabled = getattr(self.model, 'enable_thinking', False)
+                retries = 0
+                while True:
+                    generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                    raw_gen = generations[0]
+                    has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
+                    if not thinking_enabled or has_tag or retries >= 2:
+                        break
+                    retries += 1
+                    self.logger.warning(f"Missing thinking tag in EW synthesis, retrying ({retries}/2)...")
+                    
+                if thinking_enabled and not has_tag:
+                    self.logger.error("Failed to generate thinking tags for EW synthesis after retries.")
+                    new_notes = self.ew_store.get_notes(env_name) or "Failed to synthesize notes."
+                else:
+                    new_notes = strip_thinking_block(raw_gen).strip()
+                    
                 self.ew_store.update_notes(env_name, new_notes)
                 self.logger.info(f'Synthesized EW Notes from {len(observations_list)} observations:\n{new_notes}')
             except Exception as e:

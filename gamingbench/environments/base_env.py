@@ -40,10 +40,12 @@ class BaseGameEnv(object):
         self.history_tracker.clear()
         pass
 
-    def play(self):
+    def play(self, first_player=0):
         if self.game:
-            self.game.play(self.agent_list, self.model_list,
-                           self.history_tracker)
+            if hasattr(self.game, 'play') and 'first_player' in self.game.play.__code__.co_varnames:
+                self.game.play(self.agent_list, self.model_list, self.history_tracker, first_player=first_player)
+            else:
+                self.game.play(self.agent_list, self.model_list, self.history_tracker)
         pass
 
     def reset(self):

@@ -7,7 +7,7 @@ import re
 
 
 class Negotiation(OpenSpielGame):
-    def __init__(self) -> None:
+    def __init__(self, config=None) -> None:
         super().__init__("negotiation")
         pass
 

@@ -1,0 +1,16 @@
+game_name: "Hanabi"
+variant: "Hanabi-Micro"
+num_players: 3
+
+# Custom Parameters
+colors: 2
+ranks: 2
+players: 3
+hand_size: 2
+max_information_tokens: 3
+max_life_tokens: 1
+observation_type: 1 # pyhanabi.AgentObservationType.CARD_KNOWLEDGE.value
+
+# LTM Specific Game Configs
+max_retry: 3
+player_names: ["Player 0", "Player 1", "Player 2"]
