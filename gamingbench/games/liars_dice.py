@@ -9,7 +9,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 
 class LiarsDice(OpenSpielGame):
     def __init__(self, config=None) -> None:
-        super().__init__("liars_dice")
+        super().__init__("liars_dice", config=config)
         pass
 
     def extract_quantity_and_face_value(self, text):
@@ -45,6 +45,9 @@ class LiarsDice(OpenSpielGame):
             'last_move': self.cvt_to_agent_action(obs[-1]) if '-' in obs[-1] else None
         }
         return res
+
+    def get_opponent_board_state(self, board_str):
+        return board_str.replace('Your die', 'Opponent\'s die')
 
     def agent_action_to_openspiel(self, action):
         try:

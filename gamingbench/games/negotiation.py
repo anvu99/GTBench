@@ -8,8 +8,16 @@ import re
 
 class Negotiation(OpenSpielGame):
     def __init__(self, config=None) -> None:
-        super().__init__("negotiation")
+        super().__init__("negotiation", config=config)
         pass
+
+    def get_opponent_board_state(self, board_str):
+        board_str = board_str.replace('Opponent Proposal', '___TEMP_PROP___')
+        board_str = board_str.replace('Opponent Utterance', '___TEMP_UTT___')
+        board_str = board_str.replace('Your values', 'Opponent\'s values')
+        board_str = board_str.replace('___TEMP_PROP___', 'Your Proposal')
+        board_str = board_str.replace('___TEMP_UTT___', 'Your Utterance')
+        return board_str
 
     def openspiel_action_to_agent(self, action):
         turn_type = self.get_turn_type()

@@ -57,6 +57,7 @@ class ReasoningBankAgent(PromptAgent):
             self._rebuild_faiss_index()
 
         self.current_trajectory = []
+        self.current_game_intro = game_intro
         
         # Retrieve memories
         self.current_memories = self._retrieve_memories(game_intro)
@@ -83,8 +84,11 @@ class ReasoningBankAgent(PromptAgent):
         embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2", model_kwargs={"device": "cpu"})
         docs = []
         for i, memory in enumerate(self.memory_bank):
-            # Combine fields to give FAISS good semantic context
-            content_str = f"Title: {memory.get('title', '')}\nDescription: {memory.get('description', '')}\nContent: {memory.get('content', '')}"
+            # Query-to-Query matching: embed the original game intro instead of the memory content
+            content_str = memory.get("game_intro", "")
+            if not content_str:
+                # Fallback for old memory files
+                content_str = f"Title: {memory.get('title', '')}\nDescription: {memory.get('description', '')}\nContent: {memory.get('content', '')}"
             docs.append(Document(page_content=content_str, metadata={"index": i}))
         
         self._faiss_index = FAISS.from_documents(docs, embeddings)
@@ -99,8 +103,11 @@ class ReasoningBankAgent(PromptAgent):
         if not self._faiss_index:
             return []
             
+        # Add instruction wrapper to match original ReasoningBank methodology
+        instruction_query = f"Given prior game experiences, select relevant ones that could help resolve the current game situation.\n\nQuery: {query}"
+            
         k = min(self.num_memories, len(self.memory_bank))
-        docs = self._faiss_index.similarity_search(query, k=k)
+        docs = self._faiss_index.similarity_search(instruction_query, k=k)
         retrieved = []
         for doc in docs:
             idx = doc.metadata["index"]
@@ -258,7 +265,7 @@ class ReasoningBankAgent(PromptAgent):
             "trajectory": self.current_trajectory.copy(),
             "won": won,
             "env_name": env_name,
-            "game_intro": game_history.split("Past rounds:")[0].strip() if "Past rounds:" in game_history else ""
+            "game_intro": getattr(self, "current_game_intro", game_history.split("Past rounds:")[0].strip() if "Past rounds:" in game_history else "")
         }
 
         if self.batch_mode:
@@ -266,9 +273,10 @@ class ReasoningBankAgent(PromptAgent):
             return
             
         # Not in batch mode, do extraction immediately
-        new_items = self._extract_memories_from_trajectory(result)
-        self._update_memory_bank(new_items)
-        self._rebuild_faiss_index()
+        if result["won"]:
+            new_items = self._extract_memories_from_trajectory(result)
+            self._update_memory_bank(new_items)
+            self._rebuild_faiss_index()
 
     def _extract_memories_from_trajectory(self, result: dict) -> List[Dict]:
         trajectory_list = result["trajectory"]
@@ -324,7 +332,8 @@ class ReasoningBankAgent(PromptAgent):
                         "description": desc_match.group(1).strip(),
                         "content": content_match.group(1).strip(),
                         "game_type": env_name,
-                        "status": "success" if won else "fail"
+                        "status": "success" if won else "fail",
+                        "game_intro": game_intro
                     })
             
             return extracted
@@ -349,7 +358,7 @@ class ReasoningBankAgent(PromptAgent):
         """Called by the batch runner when all N games in a batch complete."""
         all_new_items = []
         for res in results:
-            if not res:
+            if not res or not res.get("won", False):
                 continue
             new_items = self._extract_memories_from_trajectory(res)
             all_new_items.extend(new_items)

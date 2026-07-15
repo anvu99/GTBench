@@ -9,7 +9,7 @@ import re
 
 class Nim(OpenSpielGame):
     def __init__(self, config=None) -> None:
-        super().__init__("nim")
+        super().__init__("nim", config=config)
         pass
 
     def openspiel_action_to_agent(self, action):

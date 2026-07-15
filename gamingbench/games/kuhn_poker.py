@@ -6,7 +6,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 class KuhnPoker(OpenSpielGame):
 
     def __init__(self, config=None) -> None:
-        super().__init__("kuhn_poker")
+        super().__init__("kuhn_poker", config=config)
         pass
 
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
@@ -40,6 +40,9 @@ class KuhnPoker(OpenSpielGame):
 
     def openspiel_action_to_agent(self, action):
         return [f'<{a}>' for a in action]
+
+    def get_opponent_board_state(self, board_str):
+        return board_str.replace('Your card', 'Opponent\'s card')
 
     def agent_action_to_openspiel(self, action):
         if action == '<Pass>':

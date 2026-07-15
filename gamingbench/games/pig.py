@@ -9,11 +9,17 @@ import pyspiel
 
 class Pig(OpenSpielGame):
     def __init__(self, config=None) -> None:
-        super().__init__("pig")
+        super().__init__("pig", config=config)
         self.game = pyspiel.load_game(
             "pig", {'winscore': 20})
         self.env = self.game.new_initial_state()
         pass
+
+    def get_opponent_board_state(self, board_str):
+        board_str = board_str.replace('Opponent score', '___TEMP___')
+        board_str = board_str.replace('Your score', 'Opponent\'s score')
+        board_str = board_str.replace('___TEMP___', 'Your score')
+        return board_str
 
     def openspiel_action_to_agent(self, action):
         return [f'<{a}>' for a in action]

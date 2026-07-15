@@ -7,7 +7,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 
 class FirstSealedAuction(OpenSpielGame):
     def __init__(self, config=None) -> None:
-        super().__init__("first_sealed_auction")
+        super().__init__("first_sealed_auction", config=config)
         pass
 
     def openspiel_action_to_agent(self, action):
@@ -21,6 +21,9 @@ class FirstSealedAuction(OpenSpielGame):
             'board': f"Your private valuation: {val}",
             'valuation': float(val)
         }
+
+    def get_opponent_board_state(self, board_str):
+        return board_str.replace('Your private valuation', 'Opponent\'s private valuation')
 
     def agent_action_to_openspiel(self, action):
         try:

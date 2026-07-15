@@ -6,7 +6,7 @@ import re
 
 class ConnectFour(OpenSpielGame):
     def __init__(self, config=None) -> None:
-        super().__init__("connect_four")
+        super().__init__("connect_four", config=config)
         self.game_name = 'connect4'
         pass
 

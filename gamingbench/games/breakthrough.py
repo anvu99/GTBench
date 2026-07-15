@@ -10,7 +10,7 @@ from gamingbench.games.openspiel_adapter import OpenSpielGame
 
 class Breakthrough(OpenSpielGame):
     def __init__(self, config=None) -> None:
-        super().__init__("breakthrough")
+        super().__init__("breakthrough", config=config)
         self.game = pyspiel.load_game(
             "breakthrough", {'columns': 3})
         self.env = self.game.new_initial_state()

@@ -135,62 +135,102 @@ class ExpelAgent(PromptAgent):
         cleaned_text = strip_thinking_block(llm_text)
         pattern = r'((?:REMOVE|EDIT|ADD|AGREE)(?: \d+|)): (?:[a-zA-Z\s\d]+: |)(.*)'
         matches = re.findall(pattern, cleaned_text)
-        new_rules = []
-        for match in matches:
-            action, rule = match
-            if 'ADD' in action:
-                new_rules.append(('ADD', rule))
-            elif 'EDIT' in action:
-                try:
-                    idx = int(action.split(' ')[1]) - 1
-                    new_rules.append((f'EDIT {idx}', rule))
-                except Exception: pass
-            elif 'REMOVE' in action:
-                try:
-                    idx = int(action.split(' ')[1]) - 1
-                    new_rules.append((f'REMOVE {idx}', rule))
-                except Exception: pass
-            elif 'AGREE' in action:
-                try:
-                    idx = int(action.split(' ')[1]) - 1
-                    new_rules.append((f'AGREE {idx}', rule))
-                except Exception: pass
-        return new_rules
+        
+        res = []
+        banned_words = ['ADD', 'AGREE', 'EDIT']
+        for operation, text in matches:
+            text = text.strip()
+            if text != '' and not any([w in text for w in banned_words]) and text.endswith('.'):
+                if 'ADD' in operation:
+                    res.append(('ADD', text))
+                else:
+                    res.append((operation.strip(), text))
+        return res
+
+    def _is_existing_rule(self, rules, operation_rule_text):
+        for i in range(len(rules)):
+            if rules[i][0] in operation_rule_text:
+                return True
+        return False
+
+    def _retrieve_rule_index(self, rules, operation):
+        operation_rule_text = operation[1]
+        for i in range(len(rules)):
+            if rules[i][0] in operation_rule_text:
+                return i
+        return None
 
     def update_rules(self, rules: List[Tuple[str, int]], operations: List[Tuple[str, str]], list_full: bool = False) -> List[Tuple[str, int]]:
-        for op, string in operations:
-            if 'ADD' in op:
-                if not list_full:
-                    rules.append((string, 2))
-            elif 'EDIT' in op:
-                idx = int(op.split(' ')[1])
-                if idx < len(rules) and idx >= 0:
-                    rules[idx] = (string, rules[idx][1] + 1)
-            elif 'REMOVE' in op:
-                idx = int(op.split(' ')[1])
-                if idx < len(rules) and idx >= 0:
-                    rules[idx] = (rules[idx][0], rules[idx][1] - 1)
-            elif 'AGREE' in op:
-                idx = int(op.split(' ')[1])
-                if idx < len(rules) and idx >= 0:
-                    rules[idx] = (rules[idx][0], rules[idx][1] + 1)
-        
-        # Sort by strength and remove elements with 0 strength
-        rules = [rule for rule in rules if rule[1] > 0]
+        delete_indices = []
+        for i in range(len(operations)):
+            operation, operation_rule_text = operations[i]
+            operation_type = operation.split(' ')[0]
+            rule_num = int(operation.split(' ')[1]) if ' ' in operation else None
+
+            if operation_type == 'ADD':
+                if self._is_existing_rule(rules, operation_rule_text): 
+                    delete_indices.append(i)
+            else:
+                if operation_type == 'EDIT':
+                    if self._is_existing_rule(rules, operation_rule_text):
+                        rule_num = self._retrieve_rule_index(rules, (operation, operation_rule_text))
+                        if rule_num is not None:
+                            operations[i] = (f'AGREE {rule_num+1}', rules[rule_num][0])
+                        else:
+                            delete_indices.append(i)
+                    elif (rule_num is None) or (rule_num > len(rules)):
+                        delete_indices.append(i)
+                elif operation_type == 'REMOVE' or operation_type == 'AGREE':
+                    if not self._is_existing_rule(rules, operation_rule_text):
+                        delete_indices.append(i)
+
+        operations = [operations[i] for i in range(len(operations)) if i not in delete_indices]
+
+        for op in ['REMOVE', 'AGREE', 'EDIT', 'ADD']:
+            for i in range(len(operations)):
+                operation, operation_rule_text = operations[i]
+                operation_type = operation.split(' ')[0]
+                if operation_type != op:
+                    continue
+
+                if operation_type == 'REMOVE':
+                    rule_index = self._retrieve_rule_index(rules, (operation, operation_rule_text))
+                    if rule_index is not None:
+                        remove_strength = 3 if list_full else 1
+                        rules[rule_index] = (rules[rule_index][0], rules[rule_index][1] - remove_strength)
+                elif operation_type == 'AGREE':
+                    rule_index = self._retrieve_rule_index(rules, (operation, operation_rule_text))
+                    if rule_index is not None:
+                        rules[rule_index] = (rules[rule_index][0], rules[rule_index][1] + 1)
+                elif operation_type == 'EDIT':
+                    rule_index = int(operation.split(' ')[1]) - 1
+                    if 0 <= rule_index < len(rules):
+                        rules[rule_index] = (operation_rule_text, rules[rule_index][1] + 1)
+                elif operation_type == 'ADD':
+                    rules.append((operation_rule_text, 2))
+                    
+        rules = [rules[i] for i in range(len(rules)) if rules[i][1] > 0]
         rules.sort(key=lambda x: x[1], reverse=True)
+
         return rules
 
     def format_rules(self) -> str:
         if not self.rules:
             return "No rules currently exist."
-        return '\n'.join([f'{i+1}. {rule[0]} (Strength: {rule[1]})' for i, rule in enumerate(self.rules)])
+        return '\n'.join([f'{i+1}. {rule[0]}' for i, rule in enumerate(self.rules)])
 
     def _get_vectorstore(self):
         docs = []
         for exp in self.experience_pool.get("success", []):
-            task_desc = exp.get("game_intro", "")
-            trajectory = exp.get("trajectory", "")
-            docs.append(Document(page_content=task_desc, metadata={"trajectory": trajectory}))
+            full_trajectory = exp.get("trajectory", "")
+            observations = exp.get("observations", [])
+            
+            if observations:
+                for obs in observations:
+                    docs.append(Document(page_content=obs, metadata={"trajectory": full_trajectory}))
+            else:
+                task_desc = exp.get("game_intro", "")
+                docs.append(Document(page_content=task_desc, metadata={"trajectory": full_trajectory}))
         
         if not docs:
             return None
@@ -202,20 +242,17 @@ class ExpelAgent(PromptAgent):
         if hasattr(super(), 'reset_game_state'):
             super().reset_game_state(opponent_name, game_intro)
         
-        self.logger.info(f"{self.agent_name} (ExpelAgent): Retrieving few-shots via FAISS...")
+        self.logger.info(f"{self.agent_name} (ExpelAgent): Initializing FAISS vectorstore...")
         self.current_fewshots = []
+        self.vectorstore = None
+        self.current_trajectory_observations = []
         
         try:
-            vectorstore = self._get_vectorstore()
-            if vectorstore is not None:
-                
-                k = min(self.num_fewshots, len(self.experience_pool.get("success", [])))
-                if k > 0:
-                    retrieved_docs = vectorstore.similarity_search(game_intro, k=k)
-                    self.current_fewshots = [doc.metadata["trajectory"] for doc in retrieved_docs]
-                    self.logger.info(f"Retrieved {len(self.current_fewshots)} successful trajectories for few-shot.")
+            self.vectorstore = self._get_vectorstore()
+            if self.vectorstore is not None:
+                self.logger.info("FAISS vectorstore initialized successfully.")
         except Exception as e:
-            self.logger.warning(f"FAISS retrieval failed: {e}")
+            self.logger.warning(f"FAISS initialization failed: {e}")
 
     def _build_prompts(self, observations):
         # Override to inject rules and fewshots right after game_intro
@@ -237,6 +274,32 @@ class ExpelAgent(PromptAgent):
         if not self.rules and getattr(self, 'hive_mode', False) and getattr(self, 'rules_store_path', None):
             if os.path.exists(self.rules_store_path):
                 self._load_memory()
+                
+        from gamingbench.prompts.observation_prompts import construct_observation_prompt
+        board_state = construct_observation_prompt(observations, env_name)
+        
+        if not hasattr(self, 'current_trajectory_observations'):
+            self.current_trajectory_observations = []
+        self.current_trajectory_observations.append(board_state)
+        
+        try:
+            if hasattr(self, 'vectorstore') and self.vectorstore is not None:
+                # Query enough documents to guarantee we can extract num_fewshots unique trajectories
+                num_success = len(self.experience_pool.get("success", []))
+                if num_success > 0:
+                    search_k = min(self.num_fewshots * 5, self.vectorstore.index.ntotal)
+                    if search_k > 0:
+                        retrieved_docs = self.vectorstore.similarity_search(board_state, k=search_k)
+                        deduped = []
+                        for doc in retrieved_docs:
+                            traj = doc.metadata["trajectory"]
+                            if traj not in deduped:
+                                deduped.append(traj)
+                                if len(deduped) == self.num_fewshots:
+                                    break
+                        self.current_fewshots = deduped
+        except Exception as e:
+            self.logger.warning(f"Dynamic FAISS retrieval failed: {e}")
                 
         # ExpeL Memory Injection Block
         if self.rules or self.current_fewshots:
@@ -265,8 +328,6 @@ class ExpelAgent(PromptAgent):
                 injection = f"--- ONGOING CHAT ---\n{chat_context}"
                 user_prompt_parts.append(injection)
                 
-        from gamingbench.prompts.observation_prompts import construct_observation_prompt
-        board_state = construct_observation_prompt(observations, env_name)
         user_prompt_parts.append(board_state)
         
         observation_prompt = "\n\n".join(user_prompt_parts)
@@ -296,6 +357,7 @@ class ExpelAgent(PromptAgent):
         match_data = {
             "game_intro": game_intro,
             "trajectory": game_history,
+            "observations": getattr(self, 'current_trajectory_observations', []),
             "won": won
         }
         
@@ -318,7 +380,7 @@ class ExpelAgent(PromptAgent):
                 self._run_compare_critique(match_data, success_match)
 
     def _run_success_critique(self, success_match):
-        list_full = len(self.rules) >= self.max_num_rules
+        list_full = len(self.rules) >= self.max_num_rules + 5
         suffix = CRITIQUE_SUMMARY_SUFFIX['full'] if list_full else CRITIQUE_SUMMARY_SUFFIX['not_full']
         
         prompt = human_critique_existing_rules_all_success_template.format(
@@ -336,7 +398,7 @@ class ExpelAgent(PromptAgent):
             self.logger.info(f"Updated rules based on success critique: {operations}")
 
     def _run_compare_critique(self, fail_match, success_match):
-        list_full = len(self.rules) >= self.max_num_rules
+        list_full = len(self.rules) >= self.max_num_rules + 5
         suffix = CRITIQUE_SUMMARY_SUFFIX['full'] if list_full else CRITIQUE_SUMMARY_SUFFIX['not_full']
         
         prompt = human_critique_existing_rules_template.format(

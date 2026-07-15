@@ -40,6 +40,7 @@ def _construct_head_prompt(enable_chat=False, game_config=None):
                f'{deck_comp_str} ' \
                'CRITICALLY: For each player, they CANNOT see their own hand (meaning they absolutely CANNOT see the color or number/rank of their own cards), but they CAN see all of their teammates\' hands to give them hints. ' \
                'You CANNOT hint yourself, you can only hint teammates. Cards drawn from the deck are completely unknown until hinted. ' \
+               'Note that a card XY is color X rank Y, for example R4 is color R, rank 4. ' \
                'You must use hints to communicate, or play/discard based on hints you receive. '
                
         if enable_chat:
@@ -61,6 +62,7 @@ def _construct_head_prompt(enable_chat=False, game_config=None):
                'Deck composition per color: three 1s, two 2s, two 3s, two 4s, and only one 5. ' \
                'CRITICALLY: For each player, they CANNOT see their own hand (meaning they absolutely CANNOT see the color or number/rank of their own cards), but they CAN see all of their teammates\' hands to give them hints. ' \
                'You CANNOT hint yourself, you can only hint teammates. Cards drawn from the deck are completely unknown until hinted. ' \
+               'Note that a card XY is color X rank Y, for example R4 is color R, rank 4. ' \
                'You must use hints to communicate, or play/discard based on hints you receive. '
                
         if enable_chat:

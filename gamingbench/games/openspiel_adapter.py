@@ -18,6 +18,7 @@ import copy
 class OpenSpielGame:
     def __init__(self, game_name, config=None) -> None:
         self.game_name = game_name
+        self.config = config
         self.game = pyspiel.load_game(game_name)
         self.env = self.game.new_initial_state()
         self.logger = utils.LLMBenchLogger(None)
@@ -393,6 +394,10 @@ class OpenSpielGame:
                             chat_by_round[r] = []
                         chat_by_round[r].append(msg)
                 
+                # Pre-filter steps by player to correctly align with q_mem even in non-alternating games
+                p0_steps = [s for s in _match.steps if s.observation.get('player_idx') == 0]
+                p1_steps = [s for s in _match.steps if s.observation.get('player_idx') == 1]
+                
                 for t in range(max_turns):
                     r = t + 1
                     agent_history += f"Round {r}:\n"
@@ -405,10 +410,11 @@ class OpenSpielGame:
                             
                     if t < len(q_mem.get(0, [])):
                         prefix = "You" if agent_idx == 0 else "Opponent"
-                        step_idx = 2 * t
-                        if step_idx < len(_match.steps):
-                            board = _match.steps[step_idx].observation.get('board', '')
+                        if t < len(p0_steps):
+                            board = p0_steps[t].observation.get('board', '')
                             if board:
+                                if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
+                                    board = self.get_opponent_board_state(board)
                                 agent_history += f"  [Position]: {board}\n"
                         agent_history += f"  [Move] {prefix}: {q_mem[0][t]}\n\n"
                     else:
@@ -421,10 +427,11 @@ class OpenSpielGame:
                             
                     if t < len(q_mem.get(1, [])):
                         prefix = "You" if agent_idx == 1 else "Opponent"
-                        step_idx = 2 * t + 1
-                        if step_idx < len(_match.steps):
-                            board = _match.steps[step_idx].observation.get('board', '')
+                        if t < len(p1_steps):
+                            board = p1_steps[t].observation.get('board', '')
                             if board:
+                                if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
+                                    board = self.get_opponent_board_state(board)
                                 agent_history += f"  [Position]: {board}\n"
                         agent_history += f"  [Move] {prefix}: {q_mem[1][t]}\n\n"
                     else:

@@ -5,7 +5,7 @@ class PrisonersDilemma(OpenSpielGame):
 
 
     def __init__(self, config=None) -> None:
-        super().__init__("python_iterated_prisoners_dilemma")
+        super().__init__("python_iterated_prisoners_dilemma", config=config)
 
     def openspiel_action_to_agent(self, action):
         return ['<Silent>', '<Testify>']
