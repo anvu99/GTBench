@@ -173,7 +173,7 @@ class ReasoningBankAgent(PromptAgent):
         
         # Save regex for move extraction
         from gamingbench.prompts.regex_and_format import get_step_env_regex_and_format
-        regex, _ = get_step_env_regex_and_format(observations.get('env_name', ''))
+        regex, _ = get_step_env_regex_and_format(observations.get('env_name', ''), turn_type=observations.get('turn_type'))
 
         valid_moves = observations.get('legal_moves', [])
         max_retries = 3

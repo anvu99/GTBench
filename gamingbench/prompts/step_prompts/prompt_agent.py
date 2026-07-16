@@ -5,8 +5,9 @@ from gamingbench.prompts.regex_and_format import get_step_env_regex_and_format
 def construct_step_prompt(observation):
 
     env_name = observation.get('env_name', '')
+    turn_type = observation.get('turn_type')
 
-    regex, format = get_step_env_regex_and_format(env_name)
+    regex, format = get_step_env_regex_and_format(env_name, turn_type=turn_type)
 
     prompt = f"""You must choose an legal action to set up advantages.
 

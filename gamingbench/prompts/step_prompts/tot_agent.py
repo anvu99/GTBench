@@ -9,8 +9,9 @@ def _get_stop_signs(env_name):
 def construct_step_prompt(observation):
 
     env_name = observation.get('env_name', '')
+    turn_type = observation.get('turn_type')
 
-    regex, format = get_step_env_regex_and_format(env_name)
+    regex, format = get_step_env_regex_and_format(env_name, turn_type=turn_type)
 
     stop_signs = _get_stop_signs(env_name)
 

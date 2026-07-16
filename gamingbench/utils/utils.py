@@ -130,8 +130,20 @@ def strip_thinking_block(text: str) -> str:
 
 def strip_chat_tags(text: str) -> str:
     import re
-    # Remove only specific formatting tags, leaving bracketed game actions intact
-    text = re.sub(r'</?(?:chat|msg|message|thought|output)>', '', text, flags=re.IGNORECASE)
+    # Try to extract content between <chat>...</chat> or <msg>...</msg> tags first.
+    # We use re.DOTALL to capture multiline messages.
+    match = re.search(r'<(?:chat|msg|message|output)>(.*?)</(?:chat|msg|message|output)>', text, flags=re.IGNORECASE | re.DOTALL)
+    if match:
+        text = match.group(1).strip()
+    else:
+        # Fallback: if no valid closing tag is found but an opening tag exists, take everything after it.
+        match = re.search(r'<(?:chat|msg|message|output)>(.*)', text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            text = match.group(1).strip()
+        else:
+            # If no tags are found at all, fallback to old behavior of just stripping known tags if they got malformed
+            text = re.sub(r'</?(?:chat|msg|message|thought|output)>', '', text, flags=re.IGNORECASE)
+            
     # Remove prefixes like "You:", "Opponent:", "Player 1:", "Player 2:", "Me:"
     text = re.sub(r'^(You|Opponent|Player \d+|Me):\s*', '', text, flags=re.IGNORECASE|re.MULTILINE)
     # Also strip wrapping quotes if they exist (e.g., You: "hello" -> hello)

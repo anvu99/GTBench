@@ -398,44 +398,58 @@ class OpenSpielGame:
                 p0_steps = [s for s in _match.steps if s.observation.get('player_idx') == 0]
                 p1_steps = [s for s in _match.steps if s.observation.get('player_idx') == 1]
                 
-                for t in range(max_turns):
-                    r = t + 1
-                    agent_history += f"Round {r}:\n"
-                    round_chat = chat_by_round.get(r, [])
-                    
-                    if len(round_chat) > 0:
-                        for msg in round_chat[0:2]:
-                            prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
-                            agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
-                            
-                    if t < len(q_mem.get(0, [])):
-                        prefix = "You" if agent_idx == 0 else "Opponent"
-                        if t < len(p0_steps):
-                            board = p0_steps[t].observation.get('board', '')
-                            if board:
-                                if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
-                                    board = self.get_opponent_board_state(board)
-                                agent_history += f"  [Position]: {board}\n"
-                        agent_history += f"  [Move] {prefix}: {q_mem[0][t]}\n\n"
-                    else:
-                        agent_history += "\n"
+                if self.game_name == 'negotiation':
+                    for step_idx, step in enumerate(_match.steps):
+                        if step_idx % 4 == 0:
+                            r = (step_idx // 4) + 1
+                            agent_history += f"Round {r}:\n"
+                        p_idx = step.observation.get('player_idx')
+                        prefix = "You" if p_idx == agent_idx else "Opponent"
+                        board = step.observation.get('board', '')
+                        if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
+                            board = self.get_opponent_board_state(board)
+                        if board:
+                            agent_history += f"  [Position]: {board}\n"
+                        agent_history += f"  [Move] {prefix}: {step.move}\n\n"
+                else:
+                    for t in range(max_turns):
+                        r = t + 1
+                        agent_history += f"Round {r}:\n"
+                        round_chat = chat_by_round.get(r, [])
                         
-                    if len(round_chat) > 2:
-                        for msg in round_chat[2:4]:
-                            prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
-                            agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
+                        if len(round_chat) > 0:
+                            for msg in round_chat[0:2]:
+                                prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
+                                agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
+                                
+                        if t < len(q_mem.get(0, [])):
+                            prefix = "You" if agent_idx == 0 else "Opponent"
+                            if t < len(p0_steps):
+                                board = p0_steps[t].observation.get('board', '')
+                                if board:
+                                    if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
+                                        board = self.get_opponent_board_state(board)
+                                    agent_history += f"  [Position]: {board}\n"
+                            agent_history += f"  [Move] {prefix}: {q_mem[0][t]}\n\n"
+                        else:
+                            agent_history += "\n"
                             
-                    if t < len(q_mem.get(1, [])):
-                        prefix = "You" if agent_idx == 1 else "Opponent"
-                        if t < len(p1_steps):
-                            board = p1_steps[t].observation.get('board', '')
-                            if board:
-                                if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
-                                    board = self.get_opponent_board_state(board)
-                                agent_history += f"  [Position]: {board}\n"
-                        agent_history += f"  [Move] {prefix}: {q_mem[1][t]}\n\n"
-                    else:
-                        agent_history += "\n"
+                        if len(round_chat) > 2:
+                            for msg in round_chat[2:4]:
+                                prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
+                                agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
+                                
+                        if t < len(q_mem.get(1, [])):
+                            prefix = "You" if agent_idx == 1 else "Opponent"
+                            if t < len(p1_steps):
+                                board = p1_steps[t].observation.get('board', '')
+                                if board:
+                                    if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
+                                        board = self.get_opponent_board_state(board)
+                                    agent_history += f"  [Position]: {board}\n"
+                            agent_history += f"  [Move] {prefix}: {q_mem[1][t]}\n\n"
+                        else:
+                            agent_history += "\n"
                         
                 your_score = results[agent_idx]
                 opp_score = results[1 - agent_idx] if len(results) > 1 else results[0]

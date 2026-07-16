@@ -1,6 +1,6 @@
 
 
-def get_step_env_regex_and_format(env_name):
+def get_step_env_regex_and_format(env_name, turn_type=None):
     if env_name == 'tictactoe':
         regex = 'C[1-3]R[1-3]'
         format = '<CxRy>, e.g., <C1R1>, <C3R3>'
@@ -23,8 +23,15 @@ def get_step_env_regex_and_format(env_name):
         regex = '(<pile:1, take:1>|<pile:2, take:[1-3]>|<pile:3, take:[1-5]>|<pile:4, take:[1-7]>)'
         format = '<pile:x, take:y>, e.g., <pile:1, take:1>, <pile:4, take:7>'
     elif env_name in ['negotiation', 'cooperative_negotiation']:
-        regex = '(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>|<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
-        format = '<Proposal|Utterance: [a, b, c]> e.g., <Proposal: [1, 2, 3]> <Utterance: [4, 2, 1]> or <agree>'
+        if turn_type == 'Utterance':
+            regex = '(<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
+            format = '<Utterance: [a, b, c]> e.g., <Utterance: [4, 2, 1]>'
+        elif turn_type == 'Proposal':
+            regex = '(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
+            format = '<Proposal: [a, b, c]> e.g., <Proposal: [1, 2, 3]> or <agree>'
+        else:
+            regex = '(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>|<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
+            format = '<Proposal|Utterance: [a, b, c]> e.g., <Proposal: [1, 2, 3]> <Utterance: [4, 2, 1]> or <agree>'
     elif env_name == 'first_sealed_auction':
         regex = '<(?:[0-9]|10)>'
         format = '<[0-9]|10>, e.g., <0>, <10>'

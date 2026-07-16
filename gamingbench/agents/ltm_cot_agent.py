@@ -53,7 +53,7 @@ class LTMCotAgent(LTMAgent):
             # Structured Thought format — signal evaluation is woven into
             # the reasoning itself so the agent cannot skip it or apply it post-hoc.
             from gamingbench.prompts.regex_and_format import get_step_env_regex_and_format
-            _, fmt = get_step_env_regex_and_format(observations.get('env_name', ''))
+            _, fmt = get_step_env_regex_and_format(observations.get('env_name', ''), turn_type=observations.get('turn_type'))
 
             scan_sources = []
             if has_self_ltm:
@@ -167,17 +167,55 @@ Your action wrapped by <>, i.e., {fmt}
         return move, query_list
 
     def chat_step(self, observations, chat_history_str: str):
-        if not self.enable_chat:
+        if not getattr(self, 'enable_chat', False):
             return "", None
             
-        from gamingbench.prompts.chat_prompts import CHAT_INSTRUCTION
+        has_opponent_ltm = bool(self.current_opponent_key and self.ltm_store.get(self.current_opponent_key))
+        has_self_ltm = bool(self.self_ltm_store.get("__self__"))
+        has_proactive_ltm = bool(self.proactive_ltm_store.get("__overall__"))
         
         self.logger.info('-' * 20 + f'{self.agent_name} Chat Generation' + '-' * 20)
         
         observations['chat_context'] = chat_history_str
         system_prompt, observation_prompt = self._build_prompts(observations)
         
-        observation_prompt = observation_prompt + '\n\n' + CHAT_INSTRUCTION
+        if observations.get('env_name') == 'cooperative_negotiation':
+            from gamingbench.prompts.chat_prompts import COOP_CHAT_INSTRUCTION
+            instruction = COOP_CHAT_INSTRUCTION
+        else:
+            from gamingbench.prompts.chat_prompts import CHAT_INSTRUCTION
+            instruction = CHAT_INSTRUCTION
+
+        if has_opponent_ltm or has_self_ltm or has_proactive_ltm:
+            cot_stages = []
+            cot_stages.append("[Context Analysis] Briefly analyze the current game state and the ongoing chat history. Identify the current strategic situation.")
+            
+            if has_proactive_ltm:
+                cot_stages.append("[Proactive Chat Strategy] Review the OVERALL STRATEGY DATABASE for any strategies of Type: 'Chat'. Decide if you should deploy one now to misdirect, bluff, or manipulate the opponent.")
+                
+            if has_opponent_ltm or has_self_ltm:
+                scan_str = "OPPONENT REPUTATION DATABASE and SELF-REPUTATION DATABASE" if (has_opponent_ltm and has_self_ltm) else ("OPPONENT REPUTATION DATABASE" if has_opponent_ltm else "SELF-REPUTATION DATABASE")
+                cot_stages.append(f"[Signal Scan] Check your {scan_str} to see if any signals fire based on the current situation, and how they should influence your communication.")
+                
+            cot_stages.append("[Message Formulation] Formulate your final chat message based on the reasoning above.")
+            
+            stages_text = "\n\n".join(cot_stages)
+            
+            step_prompt = f"""As you reason through your chat message, ensure you internally process the following stages:
+
+{stages_text}
+
+Then, following this instruction:
+{instruction}
+"""
+        else:
+            step_prompt = f"""As you reason through your chat message, ensure you think carefully before outputting the final message.
+
+Then, following this instruction:
+{instruction}
+"""
+            
+        observation_prompt = observation_prompt + '\n\n' + step_prompt
         
         msgs = self.construct_init_messages(system_prompt, observation_prompt)
         
@@ -187,6 +225,23 @@ Your action wrapped by <>, i.e., {fmt}
             message = strip_thinking_block(responses[0]).strip()
             message = strip_chat_tags(message)
             self.logger.info(f"Chat Generated: {message}")
+            
+            # Log tracing information
+            log_file = getattr(self, '_parent_store_path', getattr(self, 'ltm_store_path', 'default_trace.log')).replace('.json', '_trace.log')
+            import threading
+            try:
+                from gamingbench.agents.ltm_agent import _trace_log_lock
+                with _trace_log_lock:
+                    with open(log_file, "a") as f:
+                        f.write(f"=== GAME {getattr(self, 'game_count', 0)} MOVE {self.move_count} CHAT ===\n")
+                        if getattr(self, 'game_count', 0) == 1:
+                            f.write(f"SYSTEM PROMPT:\n{system_prompt}\n")
+                            f.write(f"OBSERVATION PROMPT:\n{observation_prompt}\n")
+                        f.write(f"RESPONSE:\n{responses}\n")
+                        f.write("=" * 50 + "\n\n")
+            except Exception as log_e:
+                self.logger.error(f"Failed to write chat trace log: {log_e}")
+                
             return message, query
         except Exception as e:
             self.logger.error(f"Chat generation failed: {e}")

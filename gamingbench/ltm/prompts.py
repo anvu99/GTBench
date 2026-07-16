@@ -31,7 +31,8 @@ Game/Opponent summary: [A few sentences — key observations about the opponent'
 
 Reasoning memory: [A few sentences — the core reasoning behind your own key moves this window.
   (1) Opponent signals: You MUST enumerate every Signal from the OPPONENT REPUTATION DATABASE that you used and state (a) which specific move you played in response to its Policy and what the immediate resulting state was, (b) what do you think about this signal — did it effectively advance your objective (e.g., gave you an advantage or improved coordination), was it neutral, or did it harm your outcome. Also include any opponent signal whose trigger you observed but whose Policy you chose not to follow, explaining why.
-  (2) Self signals: You MUST enumerate every Signal from the SELF-REPUTATION DATABASE that fired this window and state (a) whether you successfully followed the corrective Policy (for FLAW signals) or reinforced the effective tactic (for STRENGTH signals), and (b) what the resulting state was. Also include any self signal whose trigger you observed but whose Policy you did not follow, explaining why.]
+  (2) Self signals: You MUST enumerate every Signal from the SELF-REPUTATION DATABASE that fired this window and state (a) whether you successfully followed the corrective Policy (for FLAW signals) or reinforced the effective tactic (for STRENGTH signals), and (b) what the resulting state was. Also include any self signal whose trigger you observed but whose Policy you did not follow, explaining why.
+  (3) Proactive strategies: You MUST enumerate any Proactive Strategies from the OVERALL STRATEGY DATABASE (or new spontaneous proactive maneuvers/misdirections) you attempted this window. Note whether the opponent fell for them and if they resulted in a strategic advantage.]
 
 ⚠ NOTE: If no OPPONENT REPUTATION DATABASE or SELF-REPUTATION DATABASE is present, focus entirely on describing your own reasoning and observations this window.
 """
@@ -473,3 +474,215 @@ SEPARATE_TGD_SYNTHESIS_PROMPT = TGD_SYNTHESIS_PROMPT.replace(
     "for playing against a specific opponent.",
     "for playing against a specific opponent. You are analyzing the game specifically to evaluate the behavior, signaling, and errors of TEAMMATE {peer_id}. Focus ONLY on extracting insights and updating policies regarding {peer_id}."
 )
+
+PROACTIVE_GRADIENT_ENGINE_PROMPT = """\
+You are an advanced strategy analyzer evaluating an agent's performance in a completed game.
+The agent you are evaluating played as: {agent_id}
+
+Your goal is to compare the agent's in-game decisions against the GROUND TRUTH game history and produce a structured Overall Strategy Report for the agent's own Overall Strategy Database.
+
+--- ✅ MATCH GROUND TRUTH (Full History) ---
+Note: Your own moves and identity are labeled as 'You' in both the GROUND TRUTH history and your window summaries.
+
+{game_history_legend}
+- [Chat]: Chat message sent that turn (if chat is enabled).
+- [Move]: The physical move executed after the position above.
+
+{game_history}
+
+--- AGENT'S IN-GAME OBSERVATIONS (Window Summaries) ---
+{window_summaries}
+
+--- CURRENT OVERALL STRATEGY DATABASE (Prior) ---
+{current_proactive_ltm}
+("(No proactive-memory yet)" means this is the first game)
+
+You are building an OVERALL STRATEGY REPORT for the agent's Overall Strategy Database.
+The goal is to improve the agent's proactive playbook so it can deploy effective multi-turn strategies and misdirections.
+A high-quality report captures ONLY overarching strategic maneuvers, traps, or bluffs that successfully secured an advantage. Do NOT record basic tactical moves that are already obvious from the game rules.
+
+--- OVERALL STRATEGY FIELD DEFINITIONS ---
+* Strategy Name: A descriptive title for the proactive strategy.
+* Type: 'Chat' or 'Action' (identifies the primary vector of the strategy).
+* Objective: What this strategy aims to achieve. Maximum 4 sentences.
+* Policy: The concrete steps the agent should take to execute the strategy. Maximum 6 sentences.
+
+Analyze the game and propose updates using the following 5 tags:
+- [REMOVE]: A strategy can ONLY be removed if it is conceptually or factually invalid. This means:
+    1. Factually Incorrect / Hallucinated: The Type or Objective describes a physical impossibility under the game rules, or relies on a hallucinated state/mechanic.
+    2. Strategic Misidentification (False Positive): The 'Objective' described is not actually beneficial, making the 'Policy' step unnecessary. The strategy is fundamentally useless.
+  ⚠ CRITICAL PROHIBITION: You are strictly forbidden from proposing [REMOVE] for a strategy simply because the agent did not need to deploy it this game, or because the agent successfully executed it. Do NOT use [REMOVE] if only the Policy needs updating; use [MODIFY] instead.
+- [ADD]: Define a completely new strategy not yet represented in the database.
+- [MODIFY]: Identify an existing strategy worth keeping but with inaccurate fields.
+- [MERGE]: Identify two or more existing strategies that are variations of the same underlying concept.
+- [KEEP]: Emit this tag when a proactive strategy's Policy was explicitly executed in this game AND doing so was causally beneficial to the agent winning.
+
+You may include as many update entries as necessary. A single Overall Strategy Report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, multiple [KEEP]s, etc., depending on what the game data supports.
+
+⚠ PRE-ANALYSIS (complete all steps in your internal reasoning before writing any entries):
+1. GAME HISTORY RECONSTRUCTION: Review the entire unified game context (game states, actions, chat logs, and window summaries) as a single chronological timeline. Identify key moments of strategic leverage — where the agent (or opponent) executed a multi-turn plan, set a trap, deployed misdirection, or used chat to manipulate the game state. Explicitly note which moments gave a decisive strategic advantage and which backfired. You must do this regardless of whether you won or lost the game.
+2. STRATEGY EFFECTIVENESS REVIEW: For each strategy in the Current Overall Strategy Database that was deployed or attempted this game, evaluate whether it achieved its Objective. Ask: "Was the Policy executed correctly? Did it deliver the intended advantage?" Determine whether the strategy should be [KEEP]ed, [MODIFY]ied, or — if the underlying objective is no longer valid — [REMOVE]d.
+3. OPPORTUNITY DISCOVERY (two levels):
+   a. *In-game opportunities*: Identify moments in this game where a strategic play was *possible but unused*. Ask: "Could an existing strategy have been adapted to this situation?" If no existing strategy covers it, ask: "Is this opportunity general enough to be useful in future games?"
+   b. *Strategic extrapolation*: Look at the strategic vectors available in this game (chat, actions) and reason creatively about how they could be weaponized in ways that were NOT tried this game. For example: if chat was used for bluffing, ask "What other information could I use chat to inject or distort? Could I announce a false move intention to lure the opponent into a bad position?" These ideas are valid [ADD] proposals as long as they are mechanically feasible given the game rules observed in this game. Do not propose strategies that require game mechanics that were not demonstrated to exist.
+4. STRATEGY SELF-REVIEW: For every strategy you intend to report, draft it internally first and verify it against the exact game evidence you extracted it from. Ask yourself:
+  - For 'Type': "Is the primary vector of this strategy clearly defined as Chat or Action?"
+  - For 'Objective': "Does this accurately describe the strategic advantage the strategy secures?"
+  - For 'Policy': "Are the concrete steps clear, actionable, and would they actually achieve the objective in this situation?"
+5. SUCCESS PRESERVATION TEST (mandatory for every [MODIFY] proposal): For each strategy you intend to [MODIFY], explicitly replay the situation(s) from this game where this strategy last succeeded. Then ask: "Under my proposed new Type/Policy text, would that same situation still produce the same correct outcome?" You are STRICTLY FORBIDDEN from finalizing any [MODIFY] that: (a) restricts the strategy so it wouldn't be deployed in a previously successful situation, (b) removes or narrows an allowed exception in the 'Policy' that the agent previously needed to execute the strategy correctly. If your proposed change fails this test, you MUST restructure it as an additive extension.
+6. GRAVEYARD CROSS-VERIFICATION: Before writing any [ADD] or [MODIFY] strategy, cross-reference it with the GRAVEYARD OF FAILED STRATEGIES (located at the bottom of the Current Overall Strategy Database if it exists). Ensure you do not propose a policy rule that repeats a historically documented failure.
+
+--- STRICT OVERALL STRATEGY RULES ---
+
+⚠ AGENT-BEHAVIOR-ONLY RULE: Every strategy you report MUST describe a tactic from the AGENT'S OWN play.
+⚠ NAMING FORMAT RULE: Strategy names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase.
+
+⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If a strategy is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'Objective' and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward", "your resources", "opponent's cards") instead of absolute coordinates, side-specific names, or hardcoded map/game features (e.g., "Row 2", "White side", "moving North"). This ensures the strategy remains actionable if you play the opposite side or a different role in future games.
+
+⚠ VERIFICATION RULE: This rule applies differently by tag type:
+  - For [KEEP] and [MODIFY]: The strategy MUST have been explicitly deployed or clearly attempted in the current game. Do not claim success for strategies that were never executed.
+  - For [ADD]: The proposed strategy MUST be mechanically feasible given the game rules and mechanics observed in this game. It does NOT need to have been attempted. Creative extrapolations of observed vectors (chat, actions) are permitted as long as the game demonstrably supports the required mechanic.
+
+⚠ INFORMATION FIDELITY RULE: When modifying any field, your goal is to produce the most accurate description that still captures every confirmed observation from past games. Before writing a [MODIFY] on 'Objective' or 'Policy', apply this test: "Does the new text still cover the same situations the old text covered, and is the Policy still effective in all those situations?" If yes, prefer the more concise form. If no, keep the more specific wording.
+  - For 'Policy', distill confirmed execution steps into the most concise description without dropping actionable specifics. A 'Policy' that grows unboundedly with each game is a failure mode; aim to converge toward a shorter description — but never at the cost of losing concrete tactical detail.
+
+⚠ EDGE-CASE MODIFICATION RULE: If you are modifying a Policy because it failed in a specific in-game state (an edge-case condition), you MUST retain the original policy as the default action for all other cases, and simply ADD this specific in-game state and its alternative action to the text.
+
+⚠ ANTI-DUPLICATION RULE: You are STRICTLY FORBIDDEN from using [ADD] if the core concept is already represented in the database. You MUST use [MODIFY] to extend the scope of the existing strategy to cover the new edge case. [ADD] is reserved exclusively for fundamentally new behaviors that cannot be logically grouped with any existing strategy.
+
+⚠ ANTI-VAGUENESS RULE: The Policy MUST name a concrete check or calculation.
+⚠ BREVITY RULE: The Objective MUST be at most 4 sentences. The Policy MUST be at most 6 sentences.
+
+**CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
+
+Each entry in the Overall Strategy Report MUST adhere to these structural rules:
+
+- [REMOVE] Strategy: <exact name from database>
+  - Reason: <reason>
+
+- [ADD] Strategy: <new strategy name>
+  - Reason: <reason>
+  - Type: <Chat or Action>
+  - Objective: <objective description>
+  - Policy: <concrete execution steps>
+
+- [MODIFY] Strategy: <exact name from database>
+  - Reason: <reason>
+  - Field: <Field Name>
+    - Old: <current text>
+    - New: <replacement text>
+
+- [MERGE] Strategies: <Strategy A Name> + <Strategy B Name>
+  - Reason: <reason>
+  - Into Strategy: <new unified strategy name>
+  - Type: <Chat or Action>
+  - Objective: <unified objective>
+  - Policy: <unified policy>
+
+- [KEEP] Strategy: <exact name from database>
+  - Reason: <reason>
+
+- [GRAVEYARD PROPOSAL]
+  - Description: <Concise description of the failed strategy attempt>
+  - Policy Flaw: <Extract ONLY the specific part of the strategy's policy that actively harmed the agent or backfired, explaining why>
+  (Use this ONLY when identifying an existing Overall Strategy policy rule that actively harmed the agent and caused a loss, to ensure it is never written again.)
+
+
+If no notable proactive strategies were observed, write: "No strategies observed."
+"""
+
+PROACTIVE_TGD_SYNTHESIS_PROMPT = """\
+You are an AI Memory Optimizer. Your task is to update the Overall Strategy Database for the agent's own play patterns.
+You have just finished {n} game(s). Each Overall Strategy Report contains feedback tags ([REMOVE], [ADD], [MODIFY], [MERGE]).
+
+--- CURRENT OVERALL STRATEGY DATABASE ---
+{current_proactive_ltm}
+
+--- OVERALL STRATEGY REPORTS ({n} game(s)) ---
+{gradient_reports}
+
+--- OVERALL STRATEGY FIELD DEFINITIONS ---
+* Strategy Name: A descriptive title for the proactive strategy.
+* Type: 'Chat' or 'Action' (identifies the primary vector of the strategy).
+* Objective: What this strategy aims to achieve. Maximum 4 sentences.
+* Policy: The concrete steps the agent should take to execute the strategy. Maximum 6 sentences.
+
+--- APPLICATION RULES ---
+Your role is Synthesizer. You MUST execute your task in a strict 2-step process.
+
+STEP 1: GRAVEYARD MANAGEMENT
+First, manage any [GRAVEYARD PROPOSAL] entries from the Overall Strategy Reports.
+1. Cluster & Quorum: Group all conceptually identical [GRAVEYARD PROPOSAL]s from the reports. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. A cluster MUST contain at least 2 proposals to meet the quorum. Ignore any proposals that do not meet quorum.
+2. Consolidate: Merge the components of each valid cluster into a single Graveyard Proposal.
+3. Merge with Existing: Compare the consolidated proposal against the existing "--- GRAVEYARD OF FAILED STRATEGIES ---" (located at the bottom of the current overall strategy database, if it exists). If an entry with the same underlying description exists, merge them by combining their Policy Flaw lists (ensuring no historical flaws are deleted). Otherwise, prepare to append it as a new entry.
+
+STEP 2: DATABASE SYNTHESIS & CROSS-VERIFICATION
+Second, update the main Overall Strategy Database by applying the standard Overall Strategy Report tags ([REMOVE], [ADD], [MODIFY], [MERGE], [KEEP]), BUT YOU MUST FIRST FILTER THEM THROUGH THE BATCH QUORUM RULES BELOW.
+
+1. **[REMOVE] (if quorum met)**: Find the named strategy. Delete it entirely.
+2. **[ADD] (if quorum met)**: If only one identical ADD is approved, insert it. If multiple similar ADDs are approved, synthesize them into a single unified strategy using the best phrasing from the cluster.
+3. **[MODIFY] (if quorum met)**: Find the named strategy. For each listed field, overwrite the `Old` value with the `New` value. Leave all other fields untouched.
+4. **[MERGE] (if quorum met)**: Remove both named strategies. Insert the merged strategy exactly as written.
+5. **[KEEP] (if quorum met)**: Record that the named strategy's Policy was vouched for.
+6. **ANTI-VAGUENESS RULE**: The Policy MUST describe concrete, executable steps.
+7. **NAMING FORMAT RULE**: Strategy names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase.
+
+--- BATCH QUORUM RULES (apply when {n} > 1) ---
+1. **[REMOVE] Threshold**: A strategy MUST receive a [REMOVE] instruction in at least 3 games to be removed. If it appears in <3 games, IGNORE the remove instruction entirely.
+2. **[MERGE], [KEEP] Threshold**: These instructions MUST apply to the EXACT same existing strategy name in at least 2 games to be executed. If they appear in only 1 game, IGNORE them entirely.
+3. **[MODIFY] Threshold**: For an existing strategy to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same strategy met the quorum and are accepted).
+4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum, ignoring differences in their headers or names. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
+5. **NO AUTONOMOUS MERGING**: You are STRICTLY FORBIDDEN from merging strategies on your own. You may only execute a [MERGE] if it was explicitly issued by the gradient reports in at least 2 games. It is better to have multiple specific strategies with good Policy checks than 1 abstract strategy.
+
+--- BATCH RECONCILIATION RULES (apply when {n} > 1 and quorum is met) ---
+When the same strategy receives conflicting instructions that meet their respective quorum thresholds, resolve as follows:
+1. **[KEEP] vs [MERGE]**: [KEEP] takes absolute priority over [MERGE]. If a strategy has proven successful ([KEEP]), DO NOT merge it. Preserve the specific actionable strategy.
+2. **[KEEP] vs [REMOVE]**: [KEEP] takes absolute priority over [REMOVE]. A proven successful strategy cannot be removed.
+3. **[REMOVE] vs [MODIFY]**: keep the strategy and apply the [MODIFY].
+4. **[KEEP] vs [MODIFY] on the Policy field**: If the [MODIFY] adds a conditional exception for a specific edge case, you MUST apply the [MODIFY] to make the rule more robust. Only prefer [KEEP] if the [MODIFY] completely contradicts the original policy without specifying a distinct game-state condition.
+5. **[ADD] in multiple games**: synthesize clusters of conceptually similar [ADD]s into one new strategy.
+6. **[MODIFY] clusters**: If multiple different valid clusters of modifications (each meeting the 2-game quorum) apply to the same strategy, take the union to cover all valid observations.
+
+--- SYNTHESIS QUALITY RULES ---
+- **Role-Agnostic Generalization**: If a strategy is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'Objective' and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features. This ensures the strategy remains actionable if you play the opposite side or a different role in future games.
+- **Preserve Specificity**: Do not strip concrete tactical details in favor of vague generalizations. It is better to have multiple highly-specific strategies than 1 abstract strategy.
+- **Brevity**: The Objective MUST be at most 4 sentences in the final database. The Policy MUST be at most 6 sentences. Distill by removing redundant phrasing — never by dropping distinct tactical conditions or concrete safety checks.
+- **NO AUTONOMOUS MERGING**: Do not merge or group strategies unless explicitly commanded by a valid [MERGE] report that meets the quorum.
+- **FINAL GUARDRAIL CROSS-VERIFICATION**: After synthesizing the main database, cross-verify it against your updated Graveyard. Ensure that absolutely no policy rules present in the Graveyard have accidentally slipped into the final synthesized database.
+
+You may output as many synthesized memory entries as needed. Each synthesized memory entry MUST use this format:
+
+- Strategy Name: [Short Descriptive Title]
+  - Type: [Chat or Action]
+  - Objective: [Objective description — max 4 sentences]
+  - Policy: [Concrete execution steps — max 6 sentences]
+
+You MUST output the full Graveyard section at the very bottom of your output (carrying over all existing entries and appending any new ones). If no graveyard exists and none was created, you may omit this section:
+
+--- GRAVEYARD OF FAILED STRATEGIES ---
+- Description: [Concise description of the failed strategy attempt]
+  - Policy Flaw: [The specific part of the policy that actively harmed the agent and why it backfired]
+
+Write ONLY the full updated overall strategy memory and graveyard. Do not include any pleasantries or conversational filler.
+If no overall strategy memory exists yet and the gradient report contains ADD strategies, write a fresh database from those strategies.
+If the final synthesized database is completely empty (i.e., no strategies are currently stored), you MUST output exactly:
+(No strategies currently stored)
+Do not output any explanation, reasoning, or other text when the database is empty.
+"""
+
+
+PROACTIVE_LTM_INJECTION_PROMPT = """\
+=== YOUR OVERALL STRATEGY DATABASE ===
+From your experience in previous games, you have accumulated the following knowledge about successful proactive strategies.
+
+--- HOW TO READ THESE ENTRIES ---
+Each entry describes a strategic maneuver or trap you can proactively deploy. The fields mean:
+- Strategy Name: A descriptive title for the proactive strategy.
+- Type: 'Chat' or 'Action' (identifies the primary vector of the strategy).
+- Objective: What this strategy aims to achieve.
+- Policy: The concrete steps you should take to execute the strategy.
+
+--- OVERALL STRATEGY DATABASE ---
+{proactive_ltm_text}
+=== END OVERALL STRATEGY DATABASE ===
+"""

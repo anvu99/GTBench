@@ -3,13 +3,15 @@ import re
 from gamingbench.agents.prompt_agent import PromptAgent
 from gamingbench.ltm.ltm_store import LTMStore, OpponentLTMStore
 from gamingbench.ltm.prompts import (
-    LTM_INJECTION_PROMPT, SELF_LTM_INJECTION_PROMPT,
+    LTM_INJECTION_PROMPT, SELF_LTM_INJECTION_PROMPT, PROACTIVE_LTM_INJECTION_PROMPT,
     WINDOW_SUMMARIZE_PROMPT, GRADIENT_ENGINE_PROMPT, TGD_SYNTHESIS_PROMPT
 )
 from gamingbench.ltm.gradient_engine import run_gradient_engine
 from gamingbench.ltm.tgd_synthesizer import run_tgd_synthesis
 from gamingbench.ltm.self_gradient_engine import run_self_gradient_engine
 from gamingbench.ltm.self_tgd_synthesizer import run_self_tgd_synthesis
+from gamingbench.ltm.proactive_gradient_engine import run_proactive_gradient_engine
+from gamingbench.ltm.proactive_tgd_synthesizer import run_proactive_tgd_synthesis
 from gamingbench.prompts.system_prompts import construct_system_prompt
 from gamingbench.prompts.observation_prompts import construct_observation_prompt
 import threading
@@ -48,6 +50,13 @@ class LTMAgent(PromptAgent):
         if os.path.exists(self.self_ltm_store_path):
             self.self_ltm_store.load(self.self_ltm_store_path)
             
+        # ── Proactive LTM store ───────────────────────────────────────────────
+        self.proactive_ltm_store_path = self.ltm_store_path.replace('ltm_store', 'overall_strategy')
+        self.proactive_ltm_store = LTMStore()
+        
+        if os.path.exists(self.proactive_ltm_store_path):
+            self.proactive_ltm_store.load(self.proactive_ltm_store_path)
+            
         # ── Partner LTM store ────────────────────────────────────────────────
         self.partner_ltm_store = LTMStore()
         self.partner_ltm_store_path = None
@@ -75,11 +84,14 @@ class LTMAgent(PromptAgent):
                 
         self.ltm_store_path = os.path.join(storage_dir, base)
         self.self_ltm_store_path = self.ltm_store_path.replace('ltm_store', 'self_ltm_store')
+        self.proactive_ltm_store_path = self.ltm_store_path.replace('ltm_store', 'overall_strategy')
         # Reload if it happens to already exist in this specific directory
         if os.path.exists(self.ltm_store_path):
             self.ltm_store.load(self.ltm_store_path)
         if os.path.exists(self.self_ltm_store_path):
             self.self_ltm_store.load(self.self_ltm_store_path)
+        if os.path.exists(self.proactive_ltm_store_path):
+            self.proactive_ltm_store.load(self.proactive_ltm_store_path)
 
     def set_partner_store(self, path: str, my_key: str):
         """Called by main.py in Hive mode to inject the partner's LTM store."""
@@ -97,6 +109,8 @@ class LTMAgent(PromptAgent):
             self.ltm_store.load(self.ltm_store_path)
         if not self.batch_mode and os.path.exists(self.self_ltm_store_path):
             self.self_ltm_store.load(self.self_ltm_store_path)
+        if not self.batch_mode and os.path.exists(self.proactive_ltm_store_path):
+            self.proactive_ltm_store.load(self.proactive_ltm_store_path)
         if not self.batch_mode and getattr(self, 'hive_mode', False) and self.partner_ltm_store_path:
             if os.path.exists(self.partner_ltm_store_path):
                 self.partner_ltm_store.load(self.partner_ltm_store_path)
@@ -165,6 +179,21 @@ class LTMAgent(PromptAgent):
         if current_ltm:
             observation_prompt = current_ltm + "\n\n" + observation_prompt
 
+        current_proactive_ltm = self.proactive_ltm_store.get("__overall__")
+        if current_proactive_ltm and current_proactive_ltm.strip() != "(No signals currently stored)":
+            active_proactive_ltm = current_proactive_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
+            proactive_ltm_injection = PROACTIVE_LTM_INJECTION_PROMPT.format(
+                proactive_ltm_text=active_proactive_ltm
+            )
+            # Inject proactive LTM right before the opponent LTM
+            if current_ltm:
+                observation_prompt = observation_prompt.replace(current_ltm, proactive_ltm_injection + "\n\n" + current_ltm, 1)
+            else:
+                from gamingbench.prompts.observation_prompts import construct_game_intro
+                env_name = observations['env_name']
+                game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + proactive_ltm_injection, 1)
+
         current_self_ltm = self.self_ltm_store.get("__self__")
         if current_self_ltm and current_self_ltm.strip() != "(No signals currently stored)":
             active_self_ltm = current_self_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
@@ -232,14 +261,17 @@ class LTMAgent(PromptAgent):
             self.current_opponent_key and self.ltm_store.get(self.current_opponent_key)
         )
         has_self_ltm = bool(self.self_ltm_store.get("__self__"))
+        has_proactive_ltm = bool(self.proactive_ltm_store.get("__overall__"))
 
-        if has_opponent_ltm or has_self_ltm:
+        if has_opponent_ltm or has_self_ltm or has_proactive_ltm:
             # Structured Thought format — signal evaluation is woven into
             # the reasoning itself so the agent cannot skip it or apply it post-hoc.
             from gamingbench.prompts.regex_and_format import get_step_env_regex_and_format
-            _, fmt = get_step_env_regex_and_format(observations.get('env_name', ''))
+            _, fmt = get_step_env_regex_and_format(observations.get('env_name', ''), turn_type=observations.get('turn_type'))
 
             scan_sources = []
+            if has_proactive_ltm:
+                scan_sources.append("OVERALL STRATEGY DATABASE")
             if has_self_ltm:
                 scan_sources.append("SELF-REPUTATION DATABASE")
             if has_opponent_ltm:
@@ -248,12 +280,18 @@ class LTMAgent(PromptAgent):
 
             cot_stages = []
             cot_stages.append("[Board Analysis] First, carefully parse the board state. Identify where your pieces are, where the opponent's pieces are, and which direction you are moving.")
-            cot_stages.append(f"[Signal Scan] For each signal in your {scan_label}, carefully reason through whether its 'When' condition is met by the current board state and game context. Conclude clearly whether it fires.")
+            
+            if has_proactive_ltm:
+                cot_stages.append("[Proactive Strategy] Review the OVERALL STRATEGY DATABASE. Identify any proactive strategies or traps you wish to deploy right now, and extract their Policies.")
+            
+            if has_opponent_ltm or has_self_ltm:
+                scan_str = "OPPONENT REPUTATION DATABASE and SELF-REPUTATION DATABASE" if (has_opponent_ltm and has_self_ltm) else ("OPPONENT REPUTATION DATABASE" if has_opponent_ltm else "SELF-REPUTATION DATABASE")
+                cot_stages.append(f"[Signal Scan] For each signal in your {scan_str}, carefully reason through whether its 'When' condition is met by the current board state and game context. Conclude clearly whether it fires.")
             
             if has_opponent_ltm:
-                cot_stages.append("[Opponent Policy Synthesis] Synthesize the active Policies from any firing OPPONENT signals into a coherent strategy for this move, and formulate your natural top candidate move.")
-            else:
-                cot_stages.append("[Candidate Move] Based on the board state, formulate your top candidate move.")
+                cot_stages.append("[Opponent Policy Synthesis] Synthesize the active Policies from any firing OPPONENT signals into a coherent reactive strategy for this move.")
+            
+            cot_stages.append("[Candidate Move] Formulate your top candidate move based on the board state, prioritizing reactive strategies from the opponent database (if any fire) first, and then executing proactive strategies (if any) second.")
                 
             if has_self_ltm:
                 cot_stages.append("[Guardrail Verification] Check if your candidate move matches the 'What' field of any firing SELF signals. If so, execute their 'Verification' calculation to ensure the 'Risk' will not materialize. If the verification shows the risk will occur, you MUST reject the candidate and formulate a new move.")
@@ -310,6 +348,79 @@ Your action wrapped by <>, i.e., {fmt}
         self.move_count += 1
         self.logger.info('-' * 20 + f'{self.agent_name} End' + '-' * 20)
         return move, query_list
+
+    def chat_step(self, observations, chat_history_str: str):
+        if not getattr(self, 'enable_chat', False):
+            return "", None
+            
+        has_opponent_ltm = bool(self.current_opponent_key and self.ltm_store.get(self.current_opponent_key))
+        has_self_ltm = bool(self.self_ltm_store.get("__self__"))
+        has_proactive_ltm = bool(self.proactive_ltm_store.get("__overall__"))
+        
+        if not (has_opponent_ltm or has_self_ltm or has_proactive_ltm):
+            return super().chat_step(observations, chat_history_str)
+            
+        self.logger.info('-' * 20 + f'{self.agent_name} Chat Generation (LTM)' + '-' * 20)
+        
+        observations['chat_context'] = chat_history_str
+        system_prompt, observation_prompt = self._build_prompts(observations)
+        
+        cot_stages = []
+        cot_stages.append("[Context Analysis] Briefly analyze the current game state and the ongoing chat history. Identify the current strategic situation.")
+        
+        if has_proactive_ltm:
+            cot_stages.append("[Proactive Chat Strategy] Review the OVERALL STRATEGY DATABASE for any strategies of Type: 'Chat'. Decide if you should deploy one now to misdirect, bluff, or manipulate the opponent.")
+            
+        if has_opponent_ltm or has_self_ltm:
+            scan_str = "OPPONENT REPUTATION DATABASE and SELF-REPUTATION DATABASE" if (has_opponent_ltm and has_self_ltm) else ("OPPONENT REPUTATION DATABASE" if has_opponent_ltm else "SELF-REPUTATION DATABASE")
+            cot_stages.append(f"[Signal Scan] Check your {scan_str} to see if any signals fire based on the current situation, and how they should influence your communication.")
+            
+        cot_stages.append("[Message Formulation] Formulate your final chat message based on the reasoning above. If no strategic message is needed, you may remain silent or formulate a generic message.")
+        
+        stages_text = "\n\n".join(cot_stages)
+        
+        if observations.get('env_name') == 'cooperative_negotiation':
+            from gamingbench.prompts.chat_prompts import COOP_CHAT_INSTRUCTION
+            instruction = COOP_CHAT_INSTRUCTION
+        else:
+            from gamingbench.prompts.chat_prompts import CHAT_INSTRUCTION
+            instruction = CHAT_INSTRUCTION
+
+        step_prompt = f"""As you reason through your chat message, ensure you internally process the following stages:
+
+{stages_text}
+
+Then, following this instruction:
+{instruction}
+"""
+        observation_prompt = observation_prompt + '\n\n' + step_prompt
+        msgs = self.construct_init_messages(system_prompt, observation_prompt)
+        
+        try:
+            from gamingbench.utils.utils import strip_thinking_block, strip_chat_tags
+            responses, query = self.llm_query(msgs, n=1, stop=None, prompt_type='move')
+            message = strip_thinking_block(responses[0]).strip()
+            message = strip_chat_tags(message)
+            self.logger.info(f"Chat Generated: {message}")
+            
+            # Log tracing information
+            log_file = getattr(self, '_parent_store_path', getattr(self, 'ltm_store_path', 'default_trace.log')).replace('.json', '_trace.log')
+            try:
+                with _trace_log_lock:
+                    with open(log_file, "a") as f:
+                        f.write(f"=== GAME {getattr(self, 'game_count', 0)} MOVE {self.move_count} CHAT ===\n")
+                        if getattr(self, 'game_count', 0) == 1:
+                            f.write(f"SYSTEM PROMPT:\n{system_prompt}\n")
+                            f.write(f"OBSERVATION PROMPT:\n{observation_prompt}\n")
+                        f.write(f"RESPONSE:\n{responses}\n")
+                        f.write("=" * 50 + "\n\n")
+            except Exception as log_e:
+                self.logger.error(f"Failed to write chat trace log: {log_e}")
+                
+            return message, query
+        except Exception as e:
+            self.logger.error(f"Chat generation failed: {e}")
+            return "", None
 
     def _run_window_summarization(self, observations):
         """Fires a separate standalone LLM call to summarize the recent window."""
@@ -553,8 +664,10 @@ Your action wrapped by <>, i.e., {fmt}
                 opp_results[self.current_opponent_key] = future_opp.result()
 
             current_self_ltm = self.self_ltm_store.get("__self__") or "(No self-memory yet)"
+            current_proactive_ltm = self.proactive_ltm_store.get("__overall__") or "(No proactive-memory yet)"
             player_index = getattr(self, 'current_player_index', None)
             agent_id = "You"
+            
             future_self = ex.submit(
                 run_self_gradient_engine,
                 model=self.model,
@@ -565,11 +678,25 @@ Your action wrapped by <>, i.e., {fmt}
                 current_self_ltm=current_self_ltm,
                 game_history_legend=game_history_legend
             )
+            
+            future_proactive = ex.submit(
+                run_proactive_gradient_engine,
+                model=self.model,
+                agent_id=agent_id,
+                game_intro=game_intro_for_update,
+                game_history=game_history,
+                window_summaries=window_summaries_str,
+                current_proactive_ltm=current_proactive_ltm,
+                game_history_legend=game_history_legend
+            )
+            
             self_structural_report, raw_self_grad_gen, self_grad_prompt = future_self.result()
+            proactive_structural_report, raw_proactive_grad_gen, proactive_grad_prompt = future_proactive.result()
 
         for key, (rep, raw, prompt) in opp_results.items():
             self.logger.info(f'Gradient Report ({key}):\n{rep}')
         self.logger.info(f'Self Gradient Report:\n{self_structural_report}')
+        self.logger.info(f'Proactive Gradient Report:\n{proactive_structural_report}')
 
         # Trace Logging
         log_file = getattr(self, '_parent_store_path', self.ltm_store_path).replace('.json', '_trace.log')
@@ -585,11 +712,17 @@ Your action wrapped by <>, i.e., {fmt}
                 f.write(f"PROMPT:\n{self_grad_prompt}\n")
                 f.write(f"RESPONSE (raw):\n{raw_self_grad_gen}\n")
                 f.write("=" * 50 + "\n\n")
+                
+                f.write(f"=== GAME {getattr(self, 'game_count', 0)} PROACTIVE POST-GAME GRADIENT REPORT ===\n")
+                f.write(f"PROMPT:\n{proactive_grad_prompt}\n")
+                f.write(f"RESPONSE (raw):\n{raw_proactive_grad_gen}\n")
+                f.write("=" * 50 + "\n\n")
 
         if self.batch_mode:
             self._last_batch_result = {
                 "opp": opp_results,
-                "self": (self_structural_report, raw_self_grad_gen, self_grad_prompt)
+                "self": (self_structural_report, raw_self_grad_gen, self_grad_prompt),
+                "proactive": (proactive_structural_report, raw_proactive_grad_gen, proactive_grad_prompt)
             }
             self.logger.info('Batch mode: opponent and self gradient data collected, synthesis deferred.')
             return
@@ -632,7 +765,17 @@ Your action wrapped by <>, i.e., {fmt}
                 current_self_ltm=current_self_ltm,
                 gradient_reports=[self_structural_report]
             )
+            
+            future_new_proactive_ltm = ex.submit(
+                run_proactive_tgd_synthesis,
+                model=self.model,
+                game_intro=game_intro_for_update,
+                current_proactive_ltm=current_proactive_ltm,
+                gradient_reports=[proactive_structural_report]
+            )
+            
             new_self_ltm, raw_self_synth_gen, _ = future_new_self_ltm.result()
+            new_proactive_ltm, raw_proactive_synth_gen, _ = future_new_proactive_ltm.result()
 
         for key, (new_ltm, raw_synth_gen, _) in new_ltms.items():
             self.logger.info(f'New LTM ({key}):\n{new_ltm}')
@@ -642,6 +785,10 @@ Your action wrapped by <>, i.e., {fmt}
         self.logger.info(f'New Self LTM:\n{new_self_ltm}')
         self.self_ltm_store.update("__self__", new_self_ltm)
         self.self_ltm_store.save(self.self_ltm_store_path)
+        
+        self.logger.info(f'New Proactive LTM:\n{new_proactive_ltm}')
+        self.proactive_ltm_store.update("__overall__", new_proactive_ltm)
+        self.proactive_ltm_store.save(self.proactive_ltm_store_path)
 
     def flush_batch_updates(self, gradient_data: list) -> None:
         if not gradient_data:
@@ -650,6 +797,7 @@ Your action wrapped by <>, i.e., {fmt}
         n = len(gradient_data)
         opp_data_by_key = {}
         self_reports = []
+        proactive_reports = []
         for d in gradient_data:
             if isinstance(d, dict):
                 if "opp" in d:
@@ -661,10 +809,14 @@ Your action wrapped by <>, i.e., {fmt}
                     report = d["self"][0].strip()
                     if report:
                         self_reports.append(report)
+                if "proactive" in d:
+                    report = d["proactive"][0].strip()
+                    if report:
+                        proactive_reports.append(report)
             else:
                 self.logger.warning("Old gradient format (non-dict) encountered in flush_batch_updates. Skipping.")
 
-        if not opp_data_by_key and not self_reports:
+        if not opp_data_by_key and not self_reports and not proactive_reports:
             self.logger.warning("No valid gradient data extracted from batch payloads.")
             return
 
@@ -722,9 +874,24 @@ Your action wrapped by <>, i.e., {fmt}
                     gradient_reports=self_reports,
                 )
                 
+            future_new_proactive_ltm = None
+            if proactive_reports:
+                current_proactive_ltm = self.proactive_ltm_store.get("__overall__") or '(No proactive-memory yet)'
+                future_new_proactive_ltm = ex.submit(
+                    run_proactive_tgd_synthesis,
+                    model=self.model,
+                    game_intro=self.current_game_intro or 'Game rules unavailable.',
+                    current_proactive_ltm=current_proactive_ltm,
+                    gradient_reports=proactive_reports,
+                )
+                
             new_self_ltm = None
             if future_new_self_ltm:
                 new_self_ltm, raw_self_synth_gen, self_synth_prompt = future_new_self_ltm.result()
+                
+            new_proactive_ltm = None
+            if future_new_proactive_ltm:
+                new_proactive_ltm, raw_proactive_synth_gen, proactive_synth_prompt = future_new_proactive_ltm.result()
 
         log_file = getattr(self, '_parent_store_path', self.ltm_store_path).replace('.json', '_trace.log')
         with _trace_log_lock:
@@ -748,4 +915,14 @@ Your action wrapped by <>, i.e., {fmt}
                     f.write(f"=== BATCH SELF LTM SYNTHESIS ===\n")
                     f.write(f"PROMPT:\n{self_synth_prompt}\n")
                     f.write(f"RESPONSE (raw):\n{raw_self_synth_gen}\n")
+                    f.write("=" * 50 + "\n\n")
+                    
+                if new_proactive_ltm:
+                    self.logger.info(f'Batch New Proactive LTM:\n{new_proactive_ltm}')
+                    self.proactive_ltm_store.update("__overall__", new_proactive_ltm)
+                    self.proactive_ltm_store.save(self.proactive_ltm_store_path)
+                    
+                    f.write(f"=== BATCH PROACTIVE LTM SYNTHESIS ===\n")
+                    f.write(f"PROMPT:\n{proactive_synth_prompt}\n")
+                    f.write(f"RESPONSE (raw):\n{raw_proactive_synth_gen}\n")
                     f.write("=" * 50 + "\n\n")
