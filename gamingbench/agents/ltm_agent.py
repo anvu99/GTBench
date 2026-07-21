@@ -282,7 +282,7 @@ class LTMAgent(PromptAgent):
             cot_stages.append("[Board Analysis] First, carefully parse the board state. Identify where your pieces are, where the opponent's pieces are, and which direction you are moving.")
             
             if has_proactive_ltm:
-                cot_stages.append("[Proactive Strategy] Review the OVERALL STRATEGY DATABASE. Identify any proactive strategies or traps you wish to deploy right now, and extract their Policies.")
+                cot_stages.append("[Proactive Strategy] Review the PROACTIVE STRATEGY DATABASE. Identify any proactive strategies or traps you wish to deploy right now, and extract their Policies.")
             
             if has_opponent_ltm or has_self_ltm:
                 scan_str = "OPPONENT REPUTATION DATABASE and SELF-REPUTATION DATABASE" if (has_opponent_ltm and has_self_ltm) else ("OPPONENT REPUTATION DATABASE" if has_opponent_ltm else "SELF-REPUTATION DATABASE")
@@ -369,7 +369,7 @@ Your action wrapped by <>, i.e., {fmt}
         cot_stages.append("[Context Analysis] Briefly analyze the current game state and the ongoing chat history. Identify the current strategic situation.")
         
         if has_proactive_ltm:
-            cot_stages.append("[Proactive Chat Strategy] Review the OVERALL STRATEGY DATABASE for any strategies of Type: 'Chat'. Decide if you should deploy one now to misdirect, bluff, or manipulate the opponent.")
+            cot_stages.append("[Proactive Chat Strategy] Review the PROACTIVE STRATEGY DATABASE for any strategies of Type: 'Chat'. Decide if you should deploy one now to misdirect, bluff, or manipulate the opponent.")
             
         if has_opponent_ltm or has_self_ltm:
             scan_str = "OPPONENT REPUTATION DATABASE and SELF-REPUTATION DATABASE" if (has_opponent_ltm and has_self_ltm) else ("OPPONENT REPUTATION DATABASE" if has_opponent_ltm else "SELF-REPUTATION DATABASE")

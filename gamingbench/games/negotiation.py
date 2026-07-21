@@ -9,14 +9,32 @@ import re
 class Negotiation(OpenSpielGame):
     def __init__(self, config=None) -> None:
         super().__init__("negotiation", config=config)
-        pass
+        self._init_custom_utils()
+
+    def _init_custom_utils(self):
+        import random
+        self.custom_agent_utils = {}
+        for p in range(2):
+            cuts = sorted(random.sample(range(1, 20), 2))
+            self.custom_agent_utils[p] = [cuts[0], cuts[1] - cuts[0], 20 - cuts[1]]
+
+    def reset(self):
+        super().reset()
+        self._init_custom_utils()
 
     def get_opponent_board_state(self, board_str):
-        board_str = board_str.replace('Opponent Proposal', '___TEMP_PROP___')
-        board_str = board_str.replace('Opponent Utterance', '___TEMP_UTT___')
+        # Safely swap Opponent and Your prefixes
+        board_str = board_str.replace('Opponent Proposal', '___TEMP_OPP_PROP___')
+        board_str = board_str.replace('Opponent Utterance', '___TEMP_OPP_UTT___')
+        board_str = board_str.replace('Your Proposal', '___TEMP_YOUR_PROP___')
+        board_str = board_str.replace('Your Utterance', '___TEMP_YOUR_UTT___')
+        
         board_str = board_str.replace('Your values', 'Opponent\'s values')
-        board_str = board_str.replace('___TEMP_PROP___', 'Your Proposal')
-        board_str = board_str.replace('___TEMP_UTT___', 'Your Utterance')
+        
+        board_str = board_str.replace('___TEMP_OPP_PROP___', 'Your Proposal')
+        board_str = board_str.replace('___TEMP_OPP_UTT___', 'Your Utterance')
+        board_str = board_str.replace('___TEMP_YOUR_PROP___', 'Opponent Proposal')
+        board_str = board_str.replace('___TEMP_YOUR_UTT___', 'Opponent Utterance')
         return board_str
 
     def openspiel_action_to_agent(self, action):
@@ -53,6 +71,9 @@ class Negotiation(OpenSpielGame):
         agent_util_vec = agent_util_vec.split(' ')
         agent_util_vec = [int(v) for v in agent_util_vec]
 
+        if hasattr(self, 'custom_agent_utils') and current_player_idx in self.custom_agent_utils:
+            agent_util_vec = self.custom_agent_utils[current_player_idx]
+
         item_pool_match = re.search(r'Item pool: (\d+ \d+ \d+)', openspiel_obs)
         item_pool = item_pool_match.group(1)
         item_pool = item_pool.split(' ')
@@ -63,9 +84,15 @@ class Negotiation(OpenSpielGame):
         most_recent_utterance_match = re.search(
             r'Most recent utterance: (.+)', self.env.observation_string())
 
-        opp_proposal = most_recent_proposal_match.group(1) if most_recent_proposal_match else "None"
-        opp_utterance = most_recent_utterance_match.group(1) if most_recent_utterance_match else "None"
-        board_str = f"Pool: {item_pool}, Your values: {agent_util_vec}, Stage: {turn_type}, Opponent Proposal: {opp_proposal}, Opponent Utterance: {opp_utterance}"
+        recent_proposal = most_recent_proposal_match.group(1) if most_recent_proposal_match else "None"
+        recent_utterance = most_recent_utterance_match.group(1) if most_recent_utterance_match else "None"
+        
+        if turn_type == 'Utterance':
+            # If we are in the Utterance stage, the most recent proposal was just made by US.
+            board_str = f"Pool: {item_pool}, Your values: {agent_util_vec}, Stage: {turn_type}, Your Proposal: {recent_proposal}, Opponent Utterance: {recent_utterance}"
+        else:
+            # If we are in the Proposal stage, the most recent proposal was made by the OPPONENT.
+            board_str = f"Pool: {item_pool}, Your values: {agent_util_vec}, Stage: {turn_type}, Opponent Proposal: {recent_proposal}, Opponent Utterance: {recent_utterance}"
 
         res = {
             'board': board_str,
@@ -122,3 +149,39 @@ class Negotiation(OpenSpielGame):
             self.logger.info("Unsuccessful interpreting LLM move")
             self.logger.info(action)
             return None
+
+    def get_returns(self):
+        orig_returns = self.env.returns()
+        if orig_returns[0] == 0.0 and orig_returns[1] == 0.0:
+            return orig_returns
+        
+        history = self.env.history()
+        last_proposal_action = None
+        proposer_idx = None
+        
+        temp_state = self.game.new_initial_state()
+        for act in history:
+            if act < 216 and not temp_state.is_chance_node():
+                last_proposal_action = act
+                proposer_idx = temp_state.current_player()
+            temp_state.apply_action(act)
+            
+        if last_proposal_action is None:
+            return orig_returns
+            
+        a = last_proposal_action // 36
+        b = (last_proposal_action % 36) // 6
+        c = last_proposal_action % 6
+        proposal = [a, b, c]
+        
+        pool = [5, 5, 5]
+        p0_items = proposal if proposer_idx == 0 else [pool[i] - proposal[i] for i in range(3)]
+        p1_items = proposal if proposer_idx == 1 else [pool[i] - proposal[i] for i in range(3)]
+        
+        p0_utils = self.custom_agent_utils[0]
+        p1_utils = self.custom_agent_utils[1]
+        
+        score0 = sum(p0_items[i] * p0_utils[i] for i in range(3))
+        score1 = sum(p1_items[i] * p1_utils[i] for i in range(3))
+        
+        return [float(score0), float(score1)]

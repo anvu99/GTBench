@@ -69,11 +69,22 @@ def _get_memory_snapshot(agent):
         }
         if hasattr(agent, 'self_ltm_store'):
             snap['self_ltm'] = dict(agent.self_ltm_store.store)
+        if hasattr(agent, 'proactive_ltm_store'):
+            snap['proactive_ltm'] = dict(agent.proactive_ltm_store.store)
         if hasattr(agent, 'partner_ltm_store') and hasattr(agent, 'partner_ltm_store_path') and agent.partner_ltm_store_path:
             if os.path.exists(agent.partner_ltm_store_path):
                 agent.partner_ltm_store.load(agent.partner_ltm_store_path)
             snap['partner_ltm'] = dict(agent.partner_ltm_store.store)
         return snap
+    elif hasattr(agent, 'opp_store') and hasattr(agent, 'self_store') and hasattr(agent, 'proac_store'):
+        return {
+            'opp': copy.deepcopy(agent.opp_store.store),
+            'self': copy.deepcopy(agent.self_store.store),
+            'proac': copy.deepcopy(agent.proac_store.store),
+            'opp_gy': copy.deepcopy(agent.opp_store.graveyard),
+            'self_gy': copy.deepcopy(agent.self_store.graveyard),
+            'proac_gy': copy.deepcopy(agent.proac_store.graveyard),
+        }
     elif hasattr(agent, 'rules') and hasattr(agent, 'experience_pool'):
         return {
             'rules': copy.deepcopy(agent.rules),
@@ -103,11 +114,27 @@ def _restore_memory_snapshot(clone, snapshot):
             clone.ltm_store.store = dict(snapshot['ltm'])
         if hasattr(clone, 'self_ltm_store'):
             clone.self_ltm_store.store = dict(snapshot.get('self_ltm', {}))
+        if 'proactive_ltm' in snapshot and hasattr(clone, 'proactive_ltm_store'):
+            clone.proactive_ltm_store.store = dict(snapshot['proactive_ltm'])
+            clone.proactive_ltm_store_path = '/dev/null'
         if 'partner_ltm' in snapshot and hasattr(clone, 'partner_ltm_store'):
             clone.partner_ltm_store.store = dict(snapshot['partner_ltm'])
             clone.partner_ltm_store_path = '/dev/null'
         clone.ltm_store_path = '/dev/null'
         clone.self_ltm_store_path = '/dev/null'
+    if hasattr(clone, 'opp_store') and hasattr(clone, 'self_store') and hasattr(clone, 'proac_store'):
+        if 'opp' in snapshot:
+            clone.opp_store.store = copy.deepcopy(snapshot['opp'])
+            clone.opp_store.graveyard = copy.deepcopy(snapshot.get('opp_gy', {}))
+        if 'self' in snapshot:
+            clone.self_store.store = copy.deepcopy(snapshot['self'])
+            clone.self_store.graveyard = copy.deepcopy(snapshot.get('self_gy', {}))
+        if 'proac' in snapshot:
+            clone.proac_store.store = copy.deepcopy(snapshot['proac'])
+            clone.proac_store.graveyard = copy.deepcopy(snapshot.get('proac_gy', {}))
+        clone.opp_store_path = '/dev/null'
+        clone.self_store_path = '/dev/null'
+        clone.proac_store_path = '/dev/null'
     if hasattr(clone, 'rules') and hasattr(clone, 'experience_pool'):
         if 'rules' in snapshot:
             clone.rules = copy.deepcopy(snapshot['rules'])
@@ -128,6 +155,16 @@ def clone_agent_for_batch(original_agent, memory_snapshot: dict):
     """
     clone = copy.deepcopy(original_agent)
     clone._parent_store_path = getattr(original_agent, 'ew_store_path', getattr(original_agent, 'sw_store_path', getattr(original_agent, 'ltm_store_path', getattr(original_agent, 'rules_store_path', getattr(original_agent, 'memory_bank_path', None)))))
+    
+    if hasattr(original_agent, 'self_store_path'):
+        clone._parent_self_store_path = original_agent.self_store_path
+    if hasattr(original_agent, 'proac_store_path'):
+        clone._parent_proac_store_path = original_agent.proac_store_path
+    if hasattr(original_agent, 'self_ltm_store_path'):
+        clone._parent_self_ltm_store_path = original_agent.self_ltm_store_path
+    if hasattr(original_agent, 'proactive_ltm_store_path'):
+        clone._parent_proactive_ltm_store_path = original_agent.proactive_ltm_store_path
+        
     _restore_memory_snapshot(clone, memory_snapshot)
     clone.batch_mode = True
     clone._last_batch_result = None
@@ -305,7 +342,7 @@ def run_game(game_name):
             match_arg = {
                 'match_idx': match_idx,
                 'game_name': game_name,
-                'agents': agents,
+                'agents': [copy.deepcopy(a) for a in agents],
                 'models': models,
                 'result_path': result_path,
                 'args': args,
@@ -319,7 +356,7 @@ def run_game(game_name):
                 'match_idx': match_idx,
                 'game_name': game_name,
                 'models': models,
-                'agents': agents,
+                'agents': [copy.deepcopy(a) for a in agents],
                 'result_path': result_path,
                 'args': args,
                 'lock': lock
@@ -678,7 +715,7 @@ def run_game_nplayer(game_name):
             else:
                 p = list(range(num_players))
                 
-            match_agents = agents
+            match_agents = [copy.deepcopy(a) for a in agents]
             match_models = models
             match_a_configs = agent_configs
             match_m_configs = model_configs
@@ -707,7 +744,7 @@ def run_game_nplayer(game_name):
             else:
                 p = list(range(num_players))
                 
-            match_agents = agents
+            match_agents = [copy.deepcopy(a) for a in agents]
             match_models = models
             match_a_configs = agent_configs
             match_m_configs = model_configs

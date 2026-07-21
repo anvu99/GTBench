@@ -6,6 +6,7 @@ from gamingbench.agents.random_agent import RandomAgent
 from gamingbench.agents.mcts_agent import MCTSAgent
 from gamingbench.agents.titfortat_agent import TitForTatAgent
 from gamingbench.agents.ltm_agent import LTMAgent
+from gamingbench.agents.ltm_rag_agent import LTMRAGAgent
 from gamingbench.agents.sliding_window_agent import SlidingWindowAgent
 from gamingbench.agents.sliding_window_cot_agent import SlidingWindowCotAgent
 from gamingbench.agents.episodic_window_agent import EpisodicWindowAgent
@@ -27,6 +28,7 @@ __all__ = [
     "MCTSAgent",
     "TitForTatAgent",
     "LTMAgent",
+    "LTMRAGAgent",
     "SlidingWindowAgent",
     "SlidingWindowCotAgent",
     "LTMCotAgent",

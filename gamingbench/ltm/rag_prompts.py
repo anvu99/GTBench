@@ -1,3 +1,14 @@
+"""
+Long-Term Memory (LTM) RAG Prompts
+
+This module contains the core prompt templates used across the entire LTM RAG architecture.
+It includes:
+- Retrieval Injection Prompts: Used by `_build_prompts` to inject database knowledge into the live game.
+- Summarization Prompts: Used by `_run_window_summarization` to compress recent game history.
+- Gradient Engine Prompts: Used by the Reflection engines to critique completed games and propose structural updates.
+- TGD Synthesis Prompts: Used by the Consolidation engines to merge the structural updates into the final text database.
+"""
+
 LTM_INJECTION_PROMPT = """\
 === YOUR OPPONENT REPUTATION DATABASE ===
 From your experience in previous games against {opponent_id}, you have accumulated the following behavioral knowledge about this specific opponent.
@@ -23,7 +34,12 @@ Each entry describes a behavioral pattern that {opponent_id} has repeatedly exhi
 """
 
 WINDOW_SUMMARIZE_PROMPT = """\
-⚠ IMPORTANT: DO NOT select or output a move in your response. Your ONLY task right now is to generate a summary.
+================================================================================
+🛑 CRITICAL INSTRUCTION: REFLECTION PHASE 🛑
+DO NOT MAKE A GAME MOVE! You are currently in the post-window REFLECTION phase, 
+NOT the active game phase. Do not output any move actions (e.g. <C6>). 
+Your ONLY task is to generate the summary below.
+================================================================================
 
 The last {K} moves just completed. Based on everything you have observed and decided this window, output EXACTLY the following two sections:
 
@@ -33,6 +49,13 @@ Reasoning memory: [A few sentences — the core reasoning behind your own key mo
   (1) Opponent signals: You MUST enumerate every Signal from the OPPONENT REPUTATION DATABASE that you used and state (a) which specific move you played in response to its Policy and what the immediate resulting state was, (b) what do you think about this signal — did it effectively advance your objective (e.g., gave you an advantage or improved coordination), was it neutral, or did it harm your outcome. Also include any opponent signal whose trigger you observed but whose Policy you chose not to follow, explaining why.
   (2) Self signals: You MUST enumerate every Signal from the SELF-REPUTATION DATABASE that fired this window and state (a) whether you successfully followed the corrective Policy (for FLAW signals) or reinforced the effective tactic (for STRENGTH signals), and (b) what the resulting state was. Also include any self signal whose trigger you observed but whose Policy you did not follow, explaining why.
   (3) Proactive strategies: You MUST enumerate any Proactive Strategies from the PROACTIVE STRATEGY DATABASE (or new spontaneous proactive maneuvers/misdirections) you attempted this window. Note whether the opponent fell for them and if they resulted in a strategic advantage.]
+
+--- MEMORY DATABASE DEFINITIONS ---
+- OPPONENT REPUTATION DATABASE: Contains behavioral patterns and strategic quirks observed specifically in THIS opponent across past matches. Used to anticipate their specific behavior and execute tailored counter-strategies.
+- SELF-REPUTATION DATABASE: Contains your own recurring behavioral flaws, predictable tendencies, or proven successful tactics across past matches. Used to correct your own mistakes and prevent self-sabotage, or lean into your proven strengths.
+- PROACTIVE STRATEGY DATABASE: Contains general, opponent-agnostic winning strategies, openings, and best practices. Used as a playbook for foundational gameplay.
+
+⚠ CRITICAL NOTE ON VISIBILITY: The FULL GAME HISTORY provided above is the POST-GAME GROUND TRUTH. Depending on the game's rules, it may reveal omniscient information (such as the opponent's private valuations, hidden cards, or secret budgets) that was STRICTLY HIDDEN from you during the live game. You MUST carefully review the game rules to determine which information is private vs public. When summarizing your reasoning or noting observations, you MUST NOT pretend that you could see any private information before it was revealed.
 
 ⚠ NOTE: If no OPPONENT REPUTATION DATABASE or SELF-REPUTATION DATABASE is present, focus entirely on describing your own reasoning and observations this window.
 """
@@ -45,9 +68,11 @@ Your goal is to compare the agent's in-game observations against the GROUND TRUT
 These are the confirmed, objective move-by-move outcomes. Use these as the authoritative ground truth.
 Note: The evaluated agent's own moves and identity are labeled as 'You' in both the GROUND TRUTH history and their window summaries.
 
+⚠ CRITICAL NOTE ON VISIBILITY: This ground truth history may contain omniscient information (such as the opponent's private valuations, hidden cards, or secret budgets) that was STRICTLY HIDDEN from the agent during the live game, depending on the game rules. You MUST carefully review the game rules to determine which information is private vs public. When writing new memory signals or updating existing ones, your signal triggers ('When' conditions) MUST ONLY rely on information that the rules explicitly state is publicly visible to the agent during the game.
+
 Reading the history:
 {game_history_legend}
-- [Chat]: Chat message sent that turn (if chat is enabled).
+- [Chat]: Chat message sent that turn. (CRITICAL: ALWAYS verify if [Chat] lines actually exist in the game history below. If no chat lines exist, chat is NOT allowed in this game, and you MUST NOT generate any Chat-type signals).
 - [Move]: The physical move executed after the position above.
 
 {game_history}
@@ -61,12 +86,14 @@ This is what the agent believed about this opponent BEFORE the game started.
 {current_ltm}
 ("(No memory yet)" means this is the first game)
 
+
 You are building a GRADIENT REPORT for the agent's Opponent Reputation Database.
 The goal of this report is to improve the agent's knowledge of this partner/opponent so that in future games the agent can maximize its objective (e.g., win rate, joint score, or cooperative utility). Each proposed update should bring the database closer to an accurate, complete, and strategically actionable understanding of the opponent — closing knowledge gaps that, if resolved, would unlock better strategies. A high-quality report captures BOTH types of signals: (1) Negative signals — opponent/partner behaviors that led to failure, miscoordination, deception, or disadvantage; and (2) Positive/Exploitable signals — patterns in their play that led to successful coordination, or weaknesses that the agent successfully exploited.
 
 
 --- LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
+* Type: Must be exactly "Chat" or "Action". This dictates when the signal fires. If Type is "Chat", the Policy MUST provide instructions supporting what the agent should say (e.g. how to deceive, coordinate, or extract info). If Type is "Action", the Policy MUST provide instructions on what physical move to execute.
 * When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE the opponent takes their turn. Therefore, this field MUST describe the static evidence (e.g., game state, chat log) strictly prior to the opponent's action. It cannot describe the opponent's action itself, otherwise it will fire too late. Describe everything that could plausibly have driven the opponent's decision based ONLY on the static evidence available at that moment. Do not infer triggers that were not directly observed. Maximum 4 sentences.
 * What: The factual observation of what the opponent did. Write only what was directly observed. Never use conditional language (e.g., "as long as", "whenever", "unless") — those imply rules that may not have been tested. If a condition was not tested, state that explicitly. Maximum 4 sentences.
 * Policy: The concrete action to execute. It is crucial that this policy is well-designed to be strictly actionable immediately when the 'When' condition fires. If there are different game states or edge cases where following this general policy would actively harm the agent (e.g., following a defensive rule during a winning race), you MUST explicitly list those exceptions and provide the alternative conditional policy for those specific cases. Maximum 6 sentences.
@@ -113,21 +140,30 @@ You may include as many update entries as necessary. A single gradient report ca
 
 ⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If an opponent's tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role they are playing, you MUST write the 'When', 'What', and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward", "your resources", "opponent's cards") instead of absolute coordinates, side-specific names, or hardcoded map/game features (e.g., "Row 2", "White side", "moving North"). This ensures the memory remains actionable if the roles are reversed in future games.
 
+⚠ ROUND SELECTION RULE: The game state of the round you select will be used as the embedding anchor to retrieve this signal in relevant future situations. Therefore, if the Type is 'Action', the round MUST be your own action round (a round where you made a move). If the Type is 'Chat', you may output an opponent's round because agents can chat in any round.
+
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
 
+
+**Note:** You must report at most **3 rounds**, separated by commas (e.g., 8, 11, 13). Choose rounds that are as **diverse as possible** in terms of the game state. The goal is to cover different game situations where this signal/strategy applies, so it can be retrieved and used across a wider range of future scenarios. Avoid reporting consecutive or highly similar game states; prefer rounds that represent meaningfully different moments in the game.
 
 Each entry in the gradient report MUST adhere to these structural rules:
 
 - [REMOVE] Signal: <exact name from database>
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) that contradicts the signal, if applicable>
   - Reason: <one or two sentences citing the specific ground truth observation that contradicts this signal>
 
 - [ADD] Signal: <new signal name>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the trigger condition was observed>
   - Reason: <one or two sentences explaining why this new signal is warranted and not covered by any existing entry>
   - When: <specific trigger condition observation — max 4 sentences>
   - What: <specific behavior observation — max 4 sentences>
   - Policy: <concrete executable action — max 6 sentences>
 
 - [MODIFY] Signal: <exact name from database>
+  - Type: <either "Chat" or "Action", specifying which part of the round this signal triggered on>
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the trigger condition was observed>
   - Reason: <one or two sentences explaining what evidence from this game justifies the change>
   - Field: <Name of Field to Change, e.g., When, What, or Policy>
     - Old: <current text>
@@ -135,6 +171,8 @@ Each entry in the gradient report MUST adhere to these structural rules:
   (List only the fields that are changing. Omit unchanged fields.)
 
 - [MERGE] Signals: <Signal A Name> + <Signal B Name>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the unified trigger condition was observed>
   - Reason: <one or two sentences explaining why a single unified policy serves both triggering situations equally well>
   - Into Signal: <new unified signal name>
   - When: <unified trigger condition — max 4 sentences>
@@ -142,6 +180,8 @@ Each entry in the gradient report MUST adhere to these structural rules:
   - Policy: <concrete executable unified policy — max 6 sentences>
 
 - [KEEP] Signal: <exact name from database>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the policy was correctly executed>
   - Reason: <one or two sentences explaining how this signal's Policy was executed this game and why it was causally beneficial to the agent's win>
 
 - [GRAVEYARD PROPOSAL]
@@ -174,6 +214,7 @@ You have just finished {n} game(s). Each gradient report contains feedback tags 
 
 --- LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
+* Type: Must be exactly "Chat" or "Action". This dictates when the signal fires. If Type is "Chat", the Policy MUST provide instructions supporting what the agent should say (e.g. how to deceive, coordinate, or extract info). If Type is "Action", the Policy MUST provide instructions on what physical move to execute.
 * When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE the opponent takes their turn. Therefore, this field MUST describe the game state strictly prior to the opponent's action. It cannot describe the opponent's action itself, otherwise it will fire too late. Describe the specific trigger condition or game state that causes the behavior. Maximum 4 sentences.
 * What: A description of the opponent's behavior. Maximum 4 sentences.
 * Policy: The concrete action to execute. It is crucial that this policy is well-designed to be strictly actionable immediately when the 'When' condition fires. If there are different game states or edge cases where following this general policy would actively harm the agent (e.g., following a defensive rule during a winning race), you MUST explicitly list those exceptions and provide the alternative conditional policy for those specific cases. Maximum 6 sentences.
@@ -208,6 +249,7 @@ Note: each gradient entry includes a Reason field for your context. Use the Reas
 3. **[MODIFY] Threshold**: For an existing signal to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same signal met the quorum and are accepted).
 4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum, ignoring differences in their headers or names. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
 5. **NO AUTONOMOUS MERGING**: You are STRICTLY FORBIDDEN from merging signals on your own. You may only execute a [MERGE] if it was explicitly issued by the gradient reports in at least 2 games. It is better to have multiple specific signals with good policies than 1 abstract signal.
+6. **STRICT TYPE SEPARATION**: Proposals with different Types ("Chat" vs "Action") are fundamentally distinct. You MUST NEVER group, cluster, or merge a Chat proposal with an Action proposal when counting for quorum or synthesizing.
 
 --- BATCH RECONCILIATION RULES (apply when {n} > 1 and quorum is met) ---
 When the same signal receives conflicting instructions that meet their respective quorum thresholds, resolve as follows:
@@ -228,6 +270,7 @@ When the same signal receives conflicting instructions that meet their respectiv
 Each synthesized memory entry MUST use this format:
 
 - Signal: [Short Name of Pattern]
+  - Type: [Chat or Action]
   - When: [Specific trigger condition observation — max 4 sentences]
   - What: [Specific behavior observation — max 4 sentences]
   - Policy: [Concrete executable action — max 6 sentences]
@@ -238,7 +281,28 @@ You MUST output the full Graveyard section at the very bottom of your output (ca
 - Description: [Concise description of the situation]
   - Policy Flaw: [The specific part of the policy that actively harmed the agent and why it backfired]
 
-Write ONLY the full updated memory and graveyard. Do not include any pleasantries or conversational filler.
+
+⚠ ACCEPTED PROPOSALS RULE: After writing the full updated signal database, append an
+[ACCEPTED] block listing every gradient report proposal that was incorporated.
+For EACH newly generated or modified signal in the database, list which original proposals contributed to it using this exact format (you MUST include the Game N tag from the report):
+- "[Name of the Signal as written in the database above]" <- "[Exact Name of Original Proposal 1] [Game 1]", "[Exact Name of Original Proposal 2] [Game 2]"
+
+For example, if the gradient reports provided were:
+GAME 1:
+- [MODIFY] Signal: Aggressive Bluffing
+- [MERGE] Signals: Alpha + Beta
+  - Into Signal: Unified Defense
+GAME 2:
+- [MODIFY] Signal: Aggressive Bluffing
+- [MERGE] Signals: Alpha + Beta
+  - Into Signal: Unified Defense
+
+Then your accepted block must look exactly like this:
+[ACCEPTED]
+- "Aggressive Bluffing" <- "[MODIFY] Signal: Aggressive Bluffing [Game 1]", "[MODIFY] Signal: Aggressive Bluffing [Game 2]"
+- "Unified Defense" <- "[MERGE] Signals: Alpha + Beta [Game 1]", "[MERGE] Signals: Alpha + Beta [Game 2]"
+
+Write ONLY the full updated memory, graveyard, and the [ACCEPTED] block. Do not include any pleasantries or conversational filler.
 If no memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.
 If the final synthesized database is completely empty (i.e., no signals are currently stored), you MUST output exactly:
 (No signals currently stored)
@@ -276,8 +340,10 @@ Your goal is to compare the agent's in-game decisions against the GROUND TRUTH g
 --- ✅ MATCH GROUND TRUTH (Full History) ---
 Note: Your own moves and identity are labeled as 'You' in both the GROUND TRUTH history and your window summaries.
 
+⚠ CRITICAL NOTE ON VISIBILITY: This ground truth history may contain omniscient information (such as the opponent's private valuations, hidden cards, or secret budgets) that was STRICTLY HIDDEN from you during the live game, depending on the game rules. You MUST carefully review the game rules to determine which information is private vs public. When writing new memory signals or updating existing ones, your signal triggers ('When' conditions) MUST ONLY rely on information that the rules explicitly state is publicly visible to you during the game.
+
 {game_history_legend}
-- [Chat]: Chat message sent that turn (if chat is enabled).
+- [Chat]: Chat message sent that turn. (CRITICAL: ALWAYS verify if [Chat] lines actually exist in the game history below. If no chat lines exist, chat is NOT allowed in this game, and you MUST NOT generate any Chat-type signals).
 - [Move]: The physical move executed after the position above.
 
 {game_history}
@@ -295,6 +361,7 @@ A high-quality report captures ONLY patterns that require strict verification �
 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern in the agent's own play.
+* Type: Must be exactly "Chat" or "Action". This dictates when the signal fires. If Type is "Chat", the What and Verification MUST describe and verify a Chat-related behavior. If Type is "Action", they MUST describe and verify a physical move.
 * When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it executes a potentially risky pattern, so it can verify the danger. Therefore, this field MUST describe the static evidence (e.g., game state, chat log) strictly prior to the agent's action. It cannot describe the action itself, otherwise it will fire too late. Describe only directly observable static evidence, not inferences about the opponent. Maximum 4 sentences.
 * What: A descriptive observation of the specific move or plan the agent executed in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves. Maximum 4 sentences.
 * Risk: The specific negative consequence or vulnerability that MAY happen IF the agent executes the 'What' behavior. It MUST describe a negative outcome (e.g., "The opponent will capture your piece", "You will fail to coordinate and waste items"). Maximum 4 sentences.
@@ -309,7 +376,7 @@ Analyze the game and propose updates using the following 5 tags:
 - [ADD]: Define a completely new self-pattern not yet covered by any signal.
 - [MODIFY]: Identify an existing signal worth keeping but with inaccurate fields.
 - [MERGE]: Identify two or more existing signals that are variations of the same underlying behavior.
-- [KEEP]: Emit this tag when a self-signal's Verification was explicitly executed in this game AND doing so was causally beneficial to the agent winning.
+- [KEEP]: Emit this tag when a self-signal's Verification was explicitly executed in this game AND doing so was causally beneficial to the agent winning. [KEEP] is a positive vouching action — emit it only when you are confident the Verification deserves credit for the outcome. Do NOT emit [KEEP] merely because the agent won; the signal's Verification must have been directly followed and must have contributed to the win. Do NOT emit [KEEP] if the game was a draw or a loss. Unmentioned signals carry no implication — [KEEP] is not a default; it is a deliberate endorsement.
 
 You may include as many update entries as necessary. A single self-gradient report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, multiple [KEEP]s, etc., depending on what the game data supports.
 
@@ -328,7 +395,7 @@ You may include as many update entries as necessary. A single self-gradient repo
 ⚠ AGENT-BEHAVIOR-ONLY RULE: Every signal you report MUST describe a pattern in the AGENT'S OWN play.
 ⚠ NAMING FORMAT RULE: Signal names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase.
 
-⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If your own tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', 'Risk', and 'Verification' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward", "your resources", "opponent's cards") instead of absolute coordinates, side-specific names, or hardcoded map/game features (e.g., "Row 2", "White side", "moving North"). This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
+⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If your own tactical pattern or behavior is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'When', 'What', 'Risk', and 'Verification' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward", "your resources", "opponent's cards") instead of absolute coordinates, side-specific names, or hardcoded map features (e.g., "Row 2", "White side", "moving North"). This ensures the corrective memory remains actionable if you play the opposite side or a different role in future games.
 
 ⚠ VERIFICATION RULE: Do not assert unobserved agent behavior. Only describe patterns that were explicitly triggered and observed in the current game.
 
@@ -344,14 +411,21 @@ You may include as many update entries as necessary. A single self-gradient repo
 ⚠ ANTI-VAGUENESS RULE: The Verification MUST name a concrete check or calculation.
 ⚠ BREVITY RULE: Each of When, What, and Risk MUST be at most 4 sentences. The Verification MUST be at most 6 sentences.
 
+⚠ ROUND SELECTION RULE: The game state of the round you select will be used as the embedding anchor to retrieve this signal in relevant future situations. Therefore, if the Type is 'Action', the round MUST be your own action round (a round where you made a move). If the Type is 'Chat', you may output an opponent's round because agents can chat in any round.
+
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
+
+**Note:** You must report at most **3 rounds**, separated by commas (e.g., 8, 11, 13). Choose rounds that are as **diverse as possible** in terms of the game state. The goal is to cover different game situations where this signal/strategy applies, so it can be retrieved and used across a wider range of future scenarios. Avoid reporting consecutive or highly similar game states; prefer rounds that represent meaningfully different moments in the game.
 
 Each entry in the self-gradient report MUST adhere to these structural rules:
 
 - [REMOVE] Signal: <exact name from database>
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) that contradicts the signal, if applicable>
   - Reason: <reason>
 
 - [ADD] Signal: <new signal name>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the trigger condition was observed>
   - Reason: <reason>
   - When: <trigger condition>
   - What: <descriptive observation of candidate move>
@@ -359,12 +433,16 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
   - Verification: <safety check to perform>
 
 - [MODIFY] Signal: <exact name from database>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the trigger condition was observed>
   - Reason: <reason>
   - Field: <Field Name>
     - Old: <current text>
     - New: <replacement text>
 
 - [MERGE] Signals: <Signal A Name> + <Signal B Name>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the unified trigger condition was observed>
   - Reason: <reason>
   - Into Signal: <new unified signal name>
   - When: <unified trigger>
@@ -373,6 +451,8 @@ Each entry in the self-gradient report MUST adhere to these structural rules:
   - Verification: <unified safety check>
 
 - [KEEP] Signal: <exact name from database>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the policy was correctly executed>
   - Reason: <reason>
 
 - [GRAVEYARD PROPOSAL]
@@ -396,6 +476,7 @@ You have just finished {n} game(s). Each self-gradient report contains feedback 
 
 --- SELF-LTM FIELD DEFINITIONS ---
 * Signal: A short name for the behavioral pattern.
+* Type: Must be exactly "Chat" or "Action". This dictates when the signal fires. If Type is "Chat", the What and Verification MUST describe and verify a Chat-related behavior. If Type is "Action", they MUST describe and verify a physical move.
 * When: The anticipation trigger. This memory will be injected to warn the agent right BEFORE it executes a potentially risky pattern, so it can verify the danger. Therefore, this field MUST describe the game state strictly prior to the agent's action. It cannot describe the action itself, otherwise it will fire too late. Describe the specific trigger condition. Maximum 4 sentences.
 * What: A descriptive observation of the specific move or plan the agent executed in this situation. It MUST be written as a neutral description of past behavior (e.g., "The agent tends to..."), NOT as a prescriptive command or policy (e.g., "Do not...", "Commit to..."). Write only what was directly observed from the agent's actual moves. Maximum 4 sentences.
 * Risk: The specific negative consequence or vulnerability that MAY happen IF the agent executes the 'What' behavior. It MUST describe a negative outcome (e.g., "The opponent will capture your piece", "You will fail to coordinate and waste items"). Maximum 4 sentences.
@@ -427,6 +508,7 @@ Second, update the main Self-Reputation Database by applying the standard self-g
 3. **[MODIFY] Threshold**: For an existing signal to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same signal met the quorum and are accepted).
 4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum, ignoring differences in their headers or names. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
 5. **NO AUTONOMOUS MERGING**: You are STRICTLY FORBIDDEN from merging signals on your own. You may only execute a [MERGE] if it was explicitly issued by the gradient reports in at least 2 games. It is better to have multiple specific signals with good Verification checks than 1 abstract signal.
+6. **STRICT TYPE SEPARATION**: Proposals with different Types ("Chat" vs "Action") are fundamentally distinct. You MUST NEVER group, cluster, or merge a Chat proposal with an Action proposal when counting for quorum or synthesizing.
 
 --- BATCH RECONCILIATION RULES (apply when {n} > 1 and quorum is met) ---
 When the same signal receives conflicting instructions that meet their respective quorum thresholds, resolve as follows:
@@ -447,6 +529,7 @@ When the same signal receives conflicting instructions that meet their respectiv
 You may output as many synthesized memory entries as needed. Each synthesized memory entry MUST use this format:
 
 - Signal: [Short Name of Pattern]
+  - Type: [Chat or Action]
   - When: [Specific trigger condition — max 4 sentences]
   - What: [Descriptive observation of candidate move — max 4 sentences]
   - Risk: [Specific negative consequence — max 4 sentences]
@@ -458,7 +541,27 @@ You MUST output the full Graveyard section at the very bottom of your output (ca
 - Description: [Concise description of the situation]
   - Verification Flaw: [The specific part of the verification rule that actively harmed the agent and why it backfired]
 
-Write ONLY the full updated self-memory and graveyard. Do not include any pleasantries or conversational filler.
+⚠ ACCEPTED PROPOSALS RULE: After writing the full updated signal database, append an
+[ACCEPTED] block listing every gradient report proposal that was incorporated.
+For EACH newly generated or modified signal in the database, list which original proposals contributed to it using this exact format (you MUST include the Game N tag from the report):
+- "[Name of the Signal as written in the database above]" <- "[Exact Name of Original Proposal 1] [Game 1]", "[Exact Name of Original Proposal 2] [Game 2]"
+
+For example, if the gradient reports provided were:
+GAME 1:
+- [MODIFY] Signal: Aggressive Bluffing
+- [MERGE] Signals: Alpha + Beta
+  - Into Signal: Unified Defense
+GAME 2:
+- [MODIFY] Signal: Aggressive Bluffing
+- [MERGE] Signals: Alpha + Beta
+  - Into Signal: Unified Defense
+
+Then your accepted block must look exactly like this:
+[ACCEPTED]
+- "Aggressive Bluffing" <- "[MODIFY] Signal: Aggressive Bluffing [Game 1]", "[MODIFY] Signal: Aggressive Bluffing [Game 2]"
+- "Unified Defense" <- "[MERGE] Signals: Alpha + Beta [Game 1]", "[MERGE] Signals: Alpha + Beta [Game 2]"
+
+Write ONLY the full updated self-memory, graveyard, and the [ACCEPTED] block. Do not include any pleasantries or conversational filler.
 If no self-memory exists yet and the gradient report contains ADD signals, write a fresh memory from those signals.
 If the final synthesized database is completely empty (i.e., no signals are currently stored), you MUST output exactly:
 (No signals currently stored)
@@ -484,8 +587,10 @@ Your goal is to compare the agent's in-game decisions against the GROUND TRUTH g
 --- ✅ MATCH GROUND TRUTH (Full History) ---
 Note: Your own moves and identity are labeled as 'You' in both the GROUND TRUTH history and your window summaries.
 
+⚠ CRITICAL NOTE ON VISIBILITY: This ground truth history may contain omniscient information (such as the opponent's private valuations, hidden cards, or secret budgets) that was STRICTLY HIDDEN from you during the live game, depending on the game rules. You MUST carefully review the game rules to determine which information is private vs public. When writing new memory signals or updating existing ones, your signal triggers ('When' conditions) MUST ONLY rely on information that the rules explicitly state is publicly visible to you during the game.
+
 {game_history_legend}
-- [Chat]: Chat message sent that turn (if chat is enabled).
+- [Chat]: Chat message sent that turn. (CRITICAL: ALWAYS verify if [Chat] lines actually exist in the game history below. If no chat lines exist, chat is NOT allowed in this game, and you MUST NOT generate any Chat-type signals).
 - [Move]: The physical move executed after the position above.
 
 {game_history}
@@ -503,7 +608,7 @@ A high-quality report captures ONLY overarching strategic maneuvers, traps, or b
 
 --- PROACTIVE STRATEGY FIELD DEFINITIONS ---
 * Strategy Name: A descriptive title for the proactive strategy.
-* Type: 'Chat' or 'Action' (identifies the primary vector of the strategy).
+* Type: Must be exactly "Chat" or "Action". This dictates when the strategy fires. If Type is "Chat", the Policy MUST provide instructions on what the agent should say to execute the strategy. If Type is "Action", the Policy MUST provide instructions on what physical move to execute.
 * Objective: What this strategy aims to achieve. Maximum 4 sentences.
 * Policy: The concrete steps the agent should take to execute the strategy. Maximum 6 sentences.
 
@@ -515,7 +620,7 @@ Analyze the game and propose updates using the following 5 tags:
 - [ADD]: Define a completely new strategy not yet represented in the database.
 - [MODIFY]: Identify an existing strategy worth keeping but with inaccurate fields.
 - [MERGE]: Identify two or more existing strategies that are variations of the same underlying concept.
-- [KEEP]: Emit this tag when a proactive strategy's Policy was explicitly executed in this game AND doing so was causally beneficial to the agent winning.
+- [KEEP]: Emit this tag when a proactive strategy's Policy was explicitly executed in this game AND doing so was causally beneficial to the agent winning. [KEEP] is a positive vouching action — emit it only when you are confident the Policy deserves credit for the outcome. Do NOT emit [KEEP] merely because the agent won; the strategy's Policy must have been directly followed and must have contributed to the win. Do NOT emit [KEEP] if the game was a draw or a loss. Unmentioned strategies carry no implication — [KEEP] is not a default; it is a deliberate endorsement.
 
 You may include as many update entries as necessary. A single Proactive Strategy Report can contain multiple [REMOVE]s, multiple [ADD]s, multiple [MODIFY]s, multiple [KEEP]s, etc., depending on what the game data supports.
 
@@ -537,7 +642,7 @@ You may include as many update entries as necessary. A single Proactive Strategy
 ⚠ AGENT-BEHAVIOR-ONLY RULE: Every strategy you report MUST describe a tactic from the AGENT'S OWN play.
 ⚠ NAMING FORMAT RULE: Strategy names MUST be written in natural language with spaces (e.g., "Chat Noise Suppression"). You are STRICTLY FORBIDDEN from using CamelCase or PascalCase.
 
-⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If a strategy is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'Objective' and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward", "your resources", "opponent's cards") instead of absolute coordinates, side-specific names, or hardcoded map/game features (e.g., "Row 2", "White side", "moving North"). This ensures the strategy remains actionable if you play the opposite side or a different role in future games.
+⚠ ROLE-AGNOSTIC GENERALIZATION RULE: If a strategy is fundamentally applicable regardless of which side, faction, or role you are playing, you MUST write the 'Objective' and 'Policy' fields in a role-agnostic way. Use relative spatial and functional terms (e.g., "your home base", "opponent's starting area", "distance to target", "forward/backward") instead of absolute coordinates, side-specific names, or hardcoded map features (e.g., "Row 2", "White side", "moving North"). This ensures the strategy remains actionable if you play the opposite side or a different role in future games.
 
 ⚠ VERIFICATION RULE: This rule applies differently by tag type:
   - For [KEEP] and [MODIFY]: The strategy MUST have been explicitly deployed or clearly attempted in the current game. Do not claim success for strategies that were never executed.
@@ -553,33 +658,44 @@ You may include as many update entries as necessary. A single Proactive Strategy
 ⚠ ANTI-VAGUENESS RULE: The Policy MUST name a concrete check or calculation.
 ⚠ BREVITY RULE: The Objective MUST be at most 4 sentences. The Policy MUST be at most 6 sentences.
 
+⚠ ROUND SELECTION RULE: The game state of the round you select will be used as the embedding anchor to retrieve this signal in relevant future situations. Therefore, if the Type is 'Action', the round MUST be your own action round (a round where you made a move). If the Type is 'Chat', you may output an opponent's round because agents can chat in any round.
+
 **CRITICAL**: DO NOT invent observations — only record what is directly supported by the ground truth above.
+
+**Note:** You must report at most **3 rounds**, separated by commas (e.g., 8, 11, 13). Choose rounds that are as **diverse as possible** in terms of the game state. The goal is to cover different game situations where this signal/strategy applies, so it can be retrieved and used across a wider range of future scenarios. Avoid reporting consecutive or highly similar game states; prefer rounds that represent meaningfully different moments in the game.
 
 Each entry in the Proactive Strategy Report MUST adhere to these structural rules:
 
 - [REMOVE] Strategy: <exact name from database>
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) that contradicts the strategy, if applicable>
   - Reason: <reason>
 
 - [ADD] Strategy: <new strategy name>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the strategy should have been applied>
   - Reason: <reason>
-  - Type: <Chat or Action>
   - Objective: <objective description>
   - Policy: <concrete execution steps>
 
 - [MODIFY] Strategy: <exact name from database>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the strategy was applied or considered>
   - Reason: <reason>
   - Field: <Field Name>
     - Old: <current text>
     - New: <replacement text>
 
 - [MERGE] Strategies: <Strategy A Name> + <Strategy B Name>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the unified strategy applies>
   - Reason: <reason>
   - Into Strategy: <new unified strategy name>
-  - Type: <Chat or Action>
   - Objective: <unified objective>
-  - Policy: <unified policy>
+  - Policy: <unified execution steps>
 
 - [KEEP] Strategy: <exact name from database>
+  - Type: <either "Chat" or "Action">
+  - Round: <comma-separated list of up to 3 round numbers (1-indexed based on Game History markers) where the strategy was successfully deployed>
   - Reason: <reason>
 
 - [GRAVEYARD PROPOSAL]
@@ -603,7 +719,7 @@ You have just finished {n} game(s). Each Proactive Strategy Report contains feed
 
 --- PROACTIVE STRATEGY FIELD DEFINITIONS ---
 * Strategy Name: A descriptive title for the proactive strategy.
-* Type: 'Chat' or 'Action' (identifies the primary vector of the strategy).
+* Type: Must be exactly "Chat" or "Action". This dictates when the strategy fires. If Type is "Chat", the Policy MUST provide instructions on what the agent should say to execute the strategy. If Type is "Action", the Policy MUST provide instructions on what physical move to execute.
 * Objective: What this strategy aims to achieve. Maximum 4 sentences.
 * Policy: The concrete steps the agent should take to execute the strategy. Maximum 6 sentences.
 
@@ -633,6 +749,7 @@ Second, update the main Proactive Strategy Database by applying the standard Pro
 3. **[MODIFY] Threshold**: For an existing strategy to be modified, conceptually similar [MODIFY] proposals (e.g. adding a similar edge-case exception) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum. If a specific modification is proposed in only a single game, IGNORE that specific modification entirely (even if other, separate modifications to the same strategy met the quorum and are accepted).
 4. **[ADD] Threshold**: For a new behavior to be added, conceptually similar [ADD] entries (even if wording or names differ) MUST appear in at least 2 games. IMPORTANT: You must read the content to group them by underlying concept BEFORE counting to check quorum, ignoring differences in their headers or names. If a behavior is observed in only a single game's [ADD], IGNORE it entirely.
 5. **NO AUTONOMOUS MERGING**: You are STRICTLY FORBIDDEN from merging strategies on your own. You may only execute a [MERGE] if it was explicitly issued by the gradient reports in at least 2 games. It is better to have multiple specific strategies with good Policy checks than 1 abstract strategy.
+6. **STRICT TYPE SEPARATION**: Proposals with different Types ("Chat" vs "Action") are fundamentally distinct. You MUST NEVER group, cluster, or merge a Chat proposal with an Action proposal when counting for quorum or synthesizing.
 
 --- BATCH RECONCILIATION RULES (apply when {n} > 1 and quorum is met) ---
 When the same strategy receives conflicting instructions that meet their respective quorum thresholds, resolve as follows:
@@ -663,7 +780,27 @@ You MUST output the full Graveyard section at the very bottom of your output (ca
 - Description: [Concise description of the failed strategy attempt]
   - Policy Flaw: [The specific part of the policy that actively harmed the agent and why it backfired]
 
-Write ONLY the full updated proactive strategy memory and graveyard. Do not include any pleasantries or conversational filler.
+⚠ ACCEPTED PROPOSALS RULE: After writing the full updated signal database, append an
+[ACCEPTED] block listing every gradient report proposal that was incorporated.
+For EACH newly generated or modified signal in the database, list which original proposals contributed to it using this exact format (you MUST include the Game N tag from the report):
+- "[Name of the Strategy as written in the database above]" <- "[Exact Name of Original Proposal 1] [Game 1]", "[Exact Name of Original Proposal 2] [Game 2]"
+
+For example, if the gradient reports provided were:
+GAME 1:
+- [MODIFY] Strategy: Minimum Competitive Threshold
+- [MERGE] Strategies: Alpha + Beta
+  - Into Strategy: Unified Defense
+GAME 2:
+- [MODIFY] Strategy: Minimum Competitive Threshold
+- [MERGE] Strategies: Alpha + Beta
+  - Into Strategy: Unified Defense
+
+Then your accepted block must look exactly like this:
+[ACCEPTED]
+- "Minimum Competitive Threshold" <- "[MODIFY] Strategy: Minimum Competitive Threshold [Game 1]", "[MODIFY] Strategy: Minimum Competitive Threshold [Game 2]"
+- "Unified Defense" <- "[MERGE] Strategies: Alpha + Beta [Game 1]", "[MERGE] Strategies: Alpha + Beta [Game 2]"
+
+Write ONLY the full updated proactive strategy memory, graveyard, and the [ACCEPTED] block. Do not include any pleasantries or conversational filler.
 If no proactive strategy memory exists yet and the gradient report contains ADD strategies, write a fresh database from those strategies.
 If the final synthesized database is completely empty (i.e., no strategies are currently stored), you MUST output exactly:
 (No strategies currently stored)
@@ -678,11 +815,15 @@ From your experience in previous games, you have accumulated the following knowl
 --- HOW TO READ THESE ENTRIES ---
 Each entry describes a strategic maneuver or trap you can proactively deploy. The fields mean:
 - Strategy Name: A descriptive title for the proactive strategy.
-- Type: 'Chat' or 'Action' (identifies the primary vector of the strategy).
+- Type: 'Chat' or 'Action' (identifies whether this strategy is for communication or physical movement).
 - Objective: What this strategy aims to achieve.
 - Policy: The concrete steps you should take to execute the strategy.
 
 --- PROACTIVE STRATEGY DATABASE ---
 {proactive_ltm_text}
+
+--- HOW TO USE THIS DATABASE ---
+1. Review the Objective: Understand the strategic goal of the retrieved strategy.
+2. Execute the Policy: The Policy field provides a proven, generalizable plan. Unless it actively loses the game right now, you should prioritize executing this strategy to build a strong foundation.
 === END PROACTIVE STRATEGY DATABASE ===
 """

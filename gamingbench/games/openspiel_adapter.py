@@ -33,6 +33,9 @@ class OpenSpielGame:
         self.status = "Normal"
         self.quick_action_memory_for_llm = {}
 
+    def get_returns(self):
+        return self.env.returns()
+
     def print_game_info(self):
         self.logger.info(self.env.agents)
         self.logger.info(self.env.agent_selection)
@@ -165,6 +168,7 @@ class OpenSpielGame:
                     obs_dict_active['openspiel_legal_actions'] = legal_actions_active
                     valid_action_active = [self.env.action_to_string(a) for a in legal_actions_active]
                     obs_dict_active['legal_moves'] = self.openspiel_action_to_agent(valid_action_active)
+                    obs_dict_active['game_round'] = num_step + 1
 
                     chat_history_active = chat_channel.get_recent_window(player_idx)
                     msg_active, _ = agent_list[player_idx].chat_step(obs_dict_active, chat_history_active)
@@ -182,6 +186,7 @@ class OpenSpielGame:
                         obs_dict_peer['openspiel_legal_actions'] = legal_actions_peer
                         valid_action_peer = [self.env.action_to_string(a) for a in legal_actions_peer]
                         obs_dict_peer['legal_moves'] = self.openspiel_action_to_agent(valid_action_peer)
+                        obs_dict_peer['game_round'] = num_step + 1
 
                         chat_history_peer = chat_channel.get_recent_window(peer_idx)
                         msg_peer, _ = agent_list[peer_idx].chat_step(obs_dict_peer, chat_history_peer)
@@ -212,12 +217,10 @@ class OpenSpielGame:
                 observation_dict['env_name'] = self.game_name
                 observation_dict['player_idx'] = player_idx
                 observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
+                observation_dict['game_round'] = num_step + 1
                 
-                if len(legal_actions) != 1:
-                    action, query_list = agent_list[player_idx].step(
-                        observation_dict)
-                else:
-                    action, query_list = valid_action[0], []
+                action, query_list = agent_list[player_idx].step(
+                    observation_dict)
 
                 act = self.quick_action_memory_for_llm.get(
                     player_idx, [])
@@ -260,7 +263,7 @@ class OpenSpielGame:
                     if player_idx != idx:
                         agent.inform_action(self.env, player_idx, game_action)
 
-        results = self.env.returns()
+        results = self.get_returns()
         if results[0] > results[1]:
             # player 0 wins
             winner_name = agent_list[0].agent_name + \
@@ -283,6 +286,10 @@ class OpenSpielGame:
             self.logger.info(f"The winner is {_match.winner}")
         else:
             self.logger.info("There are no winner in this game.")
+            
+        if not self.is_match_normal():
+            self.logger.info("Match ended abnormally (e.g. invalid move). Skipping post_game_update.")
+            return
             
         # [LTM Integration] Post-game updates
         q_mem = self.quick_action_memory_for_llm
@@ -366,8 +373,8 @@ class OpenSpielGame:
                     agent_history += (
                         f"[Player Context] You play as Player {agent_idx + 1}. "
                         f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
-                        f"[Position Legend] Each [Position] line shows the remaining item pool, your private valuations, turn stage, and opponent's last proposal/utterance. "
-                        f"Format: Pool: [Peppers, Strawberries, Cherries], Your values: [v1, v2, v3], Stage: [Proposal/Utterance], Opponent Proposal: [p1, p2, p3], Opponent Utterance: [u1, u2, u3].\n\n"
+                        f"[Position Legend] Each [Position] line shows the remaining item pool, your private valuations, turn stage, and recent proposal/utterance. "
+                        f"Format: Pool: [Peppers, Strawberries, Cherries], Your values: [v1, v2, v3], Stage: [Proposal/Utterance], Your/Opponent Proposal: [p1, p2, p3], Your/Opponent Utterance: [u1, u2, u3].\n\n"
                     )
                 elif self.game_name == 'first_sealed_auction':
                     agent_history += (
@@ -385,7 +392,10 @@ class OpenSpielGame:
                         f"[Position Legend] Each [Position] line shows the game state before that player's move.\n\n"
                     )
 
+                # Build simplified unified history: One step = One round
                 chat_enabled = all(getattr(a, "enable_chat", False) for a in agent_list)
+                
+                # Create a round-to-chat mapping from the transcript
                 chat_by_round = {}
                 if chat_enabled:
                     for msg in chat_channel.transcript:
@@ -394,62 +404,176 @@ class OpenSpielGame:
                             chat_by_round[r] = []
                         chat_by_round[r].append(msg)
                 
-                # Pre-filter steps by player to correctly align with q_mem even in non-alternating games
-                p0_steps = [s for s in _match.steps if s.observation.get('player_idx') == 0]
-                p1_steps = [s for s in _match.steps if s.observation.get('player_idx') == 1]
-                
-                if self.game_name == 'negotiation':
-                    for step_idx, step in enumerate(_match.steps):
-                        if step_idx % 4 == 0:
-                            r = (step_idx // 4) + 1
-                            agent_history += f"Round {r}:\n"
-                        p_idx = step.observation.get('player_idx')
-                        prefix = "You" if p_idx == agent_idx else "Opponent"
-                        board = step.observation.get('board', '')
-                        if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
-                            board = self.get_opponent_board_state(board)
-                        if board:
-                            agent_history += f"  [Position]: {board}\n"
-                        agent_history += f"  [Move] {prefix}: {step.move}\n\n"
-                else:
-                    for t in range(max_turns):
-                        r = t + 1
-                        agent_history += f"Round {r}:\n"
-                        round_chat = chat_by_round.get(r, [])
+                # Loop through all overall steps
+                for step_idx, step in enumerate(_match.steps):
+                    current_round = step_idx + 1
+                    p_idx = step.observation.get('player_idx')
+                    prefix = "You" if p_idx == agent_idx else "Opponent"
+                    board = step.observation.get('board', '')
+                    if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
+                        board = self.get_opponent_board_state(board)
+                    
+                    if self.game_name == 'negotiation':
+                        # Special label for negotiation actions
+                        turn_type = step.observation.get('turn_type', 'Action')
+                        action_label = f"[{turn_type}]"
+                    else:
+                        action_label = "[Move]"
+                    
+                    # Formatting:
+                    if prefix == "You":
+                        agent_history += f"Round {current_round} (Your move):\n"
+                    else:
+                        agent_history += f"Round {current_round} (Opponent's move):\n"
                         
-                        if len(round_chat) > 0:
-                            for msg in round_chat[0:2]:
-                                prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
-                                agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
-                                
-                        if t < len(q_mem.get(0, [])):
-                            prefix = "You" if agent_idx == 0 else "Opponent"
-                            if t < len(p0_steps):
-                                board = p0_steps[t].observation.get('board', '')
-                                if board:
-                                    if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
-                                        board = self.get_opponent_board_state(board)
-                                    agent_history += f"  [Position]: {board}\n"
-                            agent_history += f"  [Move] {prefix}: {q_mem[0][t]}\n\n"
-                        else:
-                            agent_history += "\n"
-                            
-                        if len(round_chat) > 2:
-                            for msg in round_chat[2:4]:
-                                prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
-                                agent_history += f"  [Chat] {prefix}: {msg['message']}\n"
-                                
-                        if t < len(q_mem.get(1, [])):
-                            prefix = "You" if agent_idx == 1 else "Opponent"
-                            if t < len(p1_steps):
-                                board = p1_steps[t].observation.get('board', '')
-                                if board:
-                                    if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
-                                        board = self.get_opponent_board_state(board)
-                                    agent_history += f"  [Position]: {board}\n"
-                            agent_history += f"  [Move] {prefix}: {q_mem[1][t]}\n\n"
-                        else:
-                            agent_history += "\n"
+                    if board:
+                        agent_history += f"  [Position]: {board}\n"
+                        
+                    # Pre-action chat for this step (mapped by the adapter's old round_idx arithmetic)
+                    legacy_round_idx = (step_idx // self.env.num_players()) + 1
+                    round_chat = chat_by_round.get(legacy_round_idx, [])
+                    
+                    # We output the active player's chat first, then the peer's chat
+                    # Since chat happens exactly before the step, we check the legacy logic
+                    if len(round_chat) > 0:
+                        # In 2-player games, active speaks first, peer speaks second
+                        # Find messages that haven't been printed yet for this legacy_round_idx
+                        # To keep it simple and perfectly aligned, we can just print the exact chat that happened in this phase.
+                        # Actually, wait, the chat_channel stores them by `legacy_round_idx`.
+                        # Let's just group them sequentially by looking at the raw transcript.
+                        pass
+                
+                # Better approach: Just re-simulate the exact sequence of events by interleaving chat and actions sequentially.
+                agent_history = ""
+                # Re-add header
+                if self.game_name == 'breakthrough':
+                    you_color = ("Black ('b'), advancing downward from Row 8 toward Row 1"
+                                 if agent_idx == 0 else
+                                 "White ('w'), advancing upward from Row 1 toward Row 8")
+                    opp_color = "White ('w')" if agent_idx == 0 else "Black ('b')"
+                    agent_history += (
+                        f"[Player Context] You play as {you_color}. "
+                        f"The opponent plays as {opp_color}.\n"
+                        f"[Position Legend] Each [Position] line shows the board before that player's move. "
+                        f"Format: a list of row strings from Row 8 (top) to Row 1 (bottom), "
+                        f"columns a-c left to right. "
+                        f"'b'=Black piece, 'w'=White piece, '.'=empty square.\n\n"
+                    )
+                elif self.game_name == 'tictactoe':
+                    you_symbol = "X (Crosses)" if agent_idx == 0 else "O (Noughts)"
+                    opp_symbol = "O (Noughts)" if agent_idx == 0 else "X (Crosses)"
+                    agent_history += (
+                        f"[Player Context] You play as {you_symbol}. "
+                        f"The opponent plays as {opp_symbol}.\n"
+                        f"[Position Legend] Each [Position] line shows the board before that player's move. "
+                        f"Format: a list of row strings from Row 1 (top) to Row 3 (bottom), "
+                        f"columns C1-C3 left to right. "
+                        f"'x'=Cross, 'o'=Nought, '.'=empty.\n\n"
+                    )
+                elif self.game_name == 'connect4':
+                    you_symbol = "X (Red)" if agent_idx == 0 else "O (Yellow)"
+                    opp_symbol = "O (Yellow)" if agent_idx == 0 else "X (Red)"
+                    agent_history += (
+                        f"[Player Context] You play as {you_symbol}. "
+                        f"The opponent plays as {opp_symbol}.\n"
+                        f"[Position Legend] Each [Position] line shows the board before that player's move. "
+                        f"Format: a list of row strings from Row 6 (top) to Row 1 (bottom), "
+                        f"columns C1-C7 left to right. "
+                        f"'x'=Red, 'o'=Yellow, '.'=empty.\n\n"
+                    )
+                elif self.game_name == 'python_iterated_prisoners_dilemma':
+                    agent_history += (
+                        f"[Player Context] You play as Player {agent_idx + 1}. "
+                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
+                        f"[Position Legend] Each [Position] line shows the round history of decisions so far. "
+                        f"Format: Round X: You=[Silent/Testify], Opponent=[Silent/Testify].\n\n"
+                    )
+                elif self.game_name == 'kuhn_poker':
+                    agent_history += (
+                        f"[Player Context] You play as Player {agent_idx + 1}. "
+                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
+                        f"[Position Legend] Each [Position] line shows your private card and the betting history. "
+                        f"Format: Your card: [Card]. Betting history: [Moves].\n\n"
+                    )
+                elif self.game_name == 'liars_dice':
+                    agent_history += (
+                        f"[Player Context] You play as Player {agent_idx + 1}. "
+                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
+                        f"[Position Legend] Each [Position] line shows the face value of your private die. "
+                        f"Format: Your die: [1-6].\n\n"
+                    )
+                elif self.game_name == 'nim':
+                    agent_history += (
+                        f"[Player Context] You play as Player {agent_idx + 1}. "
+                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
+                        f"[Position Legend] Each [Position] line shows the match counts for the 4 piles. "
+                        f"Format: Pile 1: x, Pile 2: y, Pile 3: z, Pile 4: w.\n\n"
+                    )
+                elif self.game_name == 'pig':
+                    agent_history += (
+                        f"[Player Context] You play as Player {agent_idx + 1}. "
+                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
+                        f"[Position Legend] Each [Position] line shows your banked score, opponent banked score, and turn total. "
+                        f"Format: Your score: x, Opponent score: y, Turn total: z.\n\n"
+                    )
+                elif self.game_name == 'negotiation':
+                    agent_history += (
+                        f"[Player Context] You play as Player {agent_idx + 1}. "
+                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
+                        f"[Position Legend] Each [Position] line shows the remaining item pool, your private valuations, turn stage, and recent proposal/utterance. "
+                        f"Format: Pool: [Peppers, Strawberries, Cherries], Your values: [v1, v2, v3], Stage: [Proposal/Utterance], Your/Opponent Proposal: [p1, p2, p3], Your/Opponent Utterance: [u1, u2, u3].\n\n"
+                    )
+                elif self.game_name == 'first_sealed_auction':
+                    agent_history += (
+                        f"[Player Context] You play as Player {agent_idx + 1}. "
+                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
+                        f"[Position Legend] Each [Position] line shows your private valuation. "
+                        f"Format: Your private valuation: x.\n\n"
+                    )
+                else:
+                    you_num = 1 if agent_idx == 0 else 2
+                    opp_num = 2 if agent_idx == 0 else 1
+                    agent_history += (
+                        f"[Player Context] You play as Player {you_num}. "
+                        f"The opponent plays as Player {opp_num}.\n"
+                        f"[Position Legend] Each [Position] line shows the game state before that player's move.\n\n"
+                    )
+                
+                chat_ptr = 0
+                transcript = chat_channel.transcript if chat_enabled else []
+                
+                for step_idx, step in enumerate(_match.steps):
+                    current_round = step_idx + 1
+                    p_idx = step.observation.get('player_idx')
+                    prefix = "You" if p_idx == agent_idx else "Opponent"
+                    board = step.observation.get('board', '')
+                    if prefix == "Opponent" and hasattr(self, 'get_opponent_board_state'):
+                        board = self.get_opponent_board_state(board)
+                    
+                    if self.game_name == 'negotiation':
+                        turn_type = step.observation.get('turn_type', 'Action')
+                        action_label = f"[{turn_type}]"
+                    else:
+                        action_label = "[Move]"
+                        
+                    if prefix == "You":
+                        agent_history += f"Round {current_round} (Your move):\n"
+                    else:
+                        agent_history += f"Round {current_round} (Opponent's move):\n"
+                        
+                    if board:
+                        agent_history += f"  [Position]: {board}\n"
+                        
+                    # Extract chat up to 2 messages (active then peer)
+                    msgs_this_round = 0
+                    while chat_ptr < len(transcript) and msgs_this_round < 2:
+                        msg = transcript[chat_ptr]
+                        chat_prefix = "You" if msg["speaker"] == agent_idx else "Opponent"
+                        agent_history += f"  [Chat] {chat_prefix}: {msg['message']}\n"
+                        chat_ptr += 1
+                        msgs_this_round += 1
+                        
+                    agent_history += f"  {action_label} {prefix}: {step.move}\n\n"
                         
                 your_score = results[agent_idx]
                 opp_score = results[1 - agent_idx] if len(results) > 1 else results[0]

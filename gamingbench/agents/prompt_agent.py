@@ -64,24 +64,10 @@ class PromptAgent(BaseAgent):
             responses, query = self.llm_query(msgs, n=1, stop=None, prompt_type='move')
             message = strip_thinking_block(responses[0]).strip()
             message = strip_chat_tags(message)
+            self.logger.info(f'Chat Prompt: {observation_prompt}')
+            self.logger.info(f'Chat Raw Response: {responses}')
             self.logger.info(f"Chat Generated: {message}")
             
-            # Log tracing information
-            log_file = getattr(self, '_parent_store_path', getattr(self, 'ltm_store_path', 'default_trace.log')).replace('.json', '_trace.log')
-            import threading
-            try:
-                from gamingbench.agents.ltm_agent import _trace_log_lock
-                with _trace_log_lock:
-                    with open(log_file, "a") as f:
-                        f.write(f"=== GAME {getattr(self, 'game_count', 0)} MOVE {getattr(self, 'move_count', 0)} CHAT ===\n")
-                        if getattr(self, 'game_count', 0) == 1:
-                            f.write(f"SYSTEM PROMPT:\n{system_prompt}\n")
-                            f.write(f"OBSERVATION PROMPT:\n{observation_prompt}\n")
-                        f.write(f"RESPONSE:\n{responses}\n")
-                        f.write("=" * 50 + "\n\n")
-            except Exception as log_e:
-                self.logger.error(f"Failed to write chat trace log: {log_e}")
-                
             return message, query
         except Exception as e:
             self.logger.error(f"Chat generation failed: {e}")

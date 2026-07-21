@@ -115,6 +115,9 @@ class VLLMModel(BaseModel):
         
         tensor_parallel_size = getattr(config, 'tensor_parallel_size', 1)
         max_model_len = getattr(config, 'max_model_len', 32768)
+        self.max_model_len = max_model_len
+        
+        gpu_memory_utilization = getattr(config, 'gpu_memory_utilization', 0.83)
         
         engine_kwargs = {
             "tensor_parallel_size": tensor_parallel_size,
@@ -125,6 +128,7 @@ class VLLMModel(BaseModel):
             "kv_cache_dtype": "fp8",  # halves KV-cache VRAM; no quality change
             "enable_chunked_prefill": True,
             "max_num_batched_tokens": 4096,
+            "gpu_memory_utilization": gpu_memory_utilization,
         }
         
         # Initialize engine lazily or fetch singleton
@@ -235,21 +239,39 @@ class VLLMModel(BaseModel):
         # Handle custom stops
         params = self.sampling_params
         thinking_budget = getattr(params, 'thinking_token_budget', None)
+        
+        # Calculate safe max_tokens to prevent instant rejection
+        prompt_tokens = self.tokenizer.encode(prompt)
+        prompt_len = len(prompt_tokens)
+        safe_max_tokens = min(params.max_tokens, self.max_model_len - prompt_len - 100)
+        
+        if safe_max_tokens <= 0:
+            raise ValueError(f"Prompt is too long! Length: {prompt_len}, Max allowed: {self.max_model_len}")
+            
+        if thinking_budget:
+            # Fix 1: Prevent negative thinking budgets if prompt is extremely long
+            safe_thinking_budget = max(0, min(thinking_budget, safe_max_tokens - 100))
+        else:
+            safe_thinking_budget = None
 
-        if stop or enable_thinking is False:
+        # Fix 2: Also trigger parameter cloning if the thinking budget was constrained by safe_max_tokens
+        if stop or enable_thinking is False or safe_max_tokens != params.max_tokens or safe_thinking_budget != thinking_budget:
             stop_seqs = [stop] if isinstance(stop, str) else stop
+            if stop_seqs is None:
+                stop_seqs = params.stop
             
             # If dynamically disabled, fall back to optimal no-thinking params
             if enable_thinking is False and self.is_qwen3:
                 temp = 0.7
                 tp_p = 0.8
-                budget = thinking_budget # MUST NOT be None, otherwise vLLM qwen3 parser hangs!
+                budget = None # Fix 3: Set budget to None to actually disable thinking. Passing safe_thinking_budget here overrides the flag and forces the model to think!
             else:
                 temp = params.temperature
                 tp_p = params.top_p
-                budget = thinking_budget
+                budget = safe_thinking_budget
                 
             # clone params to add stop and overrides
+            from vllm import SamplingParams
             params = SamplingParams(
                 temperature=temp,
                 top_p=tp_p,
@@ -257,7 +279,7 @@ class VLLMModel(BaseModel):
                 min_p=params.min_p,
                 presence_penalty=params.presence_penalty,
                 repetition_penalty=params.repetition_penalty,
-                max_tokens=params.max_tokens,
+                max_tokens=safe_max_tokens,
                 thinking_token_budget=budget,
                 stop=stop_seqs
             )

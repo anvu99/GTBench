@@ -9,7 +9,10 @@ def construct_step_prompt(observation):
 
     regex, format = get_step_env_regex_and_format(env_name, turn_type=turn_type)
 
-    prompt = f"""You must choose an legal action to set up advantages.
+    prompt = f"""
+================================================================================
+# FINAL INSTRUCTION
+You must choose an legal action to set up advantages.
 
 Your output must be in the following format:
 
@@ -17,6 +20,7 @@ Action:
 Your action wrapped with <>, {format}
 
 Please return your answer without explanation!
+================================================================================
 """
     return {
         'prompt': prompt,
