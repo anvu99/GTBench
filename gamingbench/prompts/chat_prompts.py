@@ -1,6 +1,4 @@
 CHAT_INSTRUCTION = """\
-================================================================================
-# FINAL INSTRUCTION
 Before making your next game move, you have the opportunity to send a short chat message to the opponent. 
 Use this channel highly strategically to increase your chances of winning. Depending on the game state, you should actively use the chat to:
 - Make a deal, negotiate, or collude if it benefits your long-term goal.
@@ -10,7 +8,6 @@ Use this channel highly strategically to increase your chances of winning. Depen
 
 Write a single, concise chat message to the opponent utilizing these psychological and strategic tactics. 
 Do NOT output a game move, and do NOT output internal reasoning. Just output the message text you wish to send enclosed in <chat> and </chat> tags.
-================================================================================
 """
 
 CHAT_HISTORY_INJECTION = """\
@@ -19,12 +16,9 @@ CHAT_HISTORY_INJECTION = """\
 """
 
 COOP_CHAT_INSTRUCTION = """\
-================================================================================
-# FINAL INSTRUCTION
 Before making your next game move, you have the opportunity to send a short chat message to your partner. 
 Use this channel to communicate and coordinate to increase your joint utility.
 
 Write a single, concise chat message to your partner. 
 Do NOT output a game move, and do NOT output internal reasoning. Just output the message text you wish to send enclosed in <chat> and </chat> tags.
-================================================================================
 """

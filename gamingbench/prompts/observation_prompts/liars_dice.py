@@ -14,23 +14,30 @@ def construct_observation_prompt(observations):
 
     self_dice_face_value = observations['self_dice_face_value']
     last_move = observations['last_move']
-    legal_moves = observations['legal_moves']
-    legal_move_str = ', '.join(legal_moves)
+    is_chat = observations.get('is_chat_phase', False)
+    is_active = observations.get('is_active_player', True)
 
     if last_move is None:
         prompt = f'Currently, the face value of your dice is {self_dice_face_value}. You are the first to go.' \
                  '\n' \
                  'You are playing the Liar\'s Dice with another opponent. Therefore, there are only two dices in total.' \
-                 f'\n\n' \
-                 f'The legal actions are: {legal_move_str}.'
-                 # 'You should call action <Liar> if the opponent called <2 dices, 6 value> in the last round. Because there is no other actions.' \
+                 f'\n\n'
     else:
-        prompt = f'Currently, the face value of your dice is {self_dice_face_value}. Last time, the opponent called action <{last_move}>.' \
+        actor = "the opponent" if is_active else "you"
+        prompt = f'Currently, the face value of your dice is {self_dice_face_value}. Last time, {actor} called action <{last_move}>.' \
                  '\n' \
                  'You are playing the Liar\'s Dice with another opponent. Therefore, there are only two dices in total.' \
-                 f'\n\n' \
-                 f'The legal actions are: {legal_move_str}.'
-                 # 'You should call action <Liar> if the opponent called <2 dices, 6 value> in the last round. Because there is no other actions.' \
+                 f'\n\n'
+
+    if is_chat:
+        if is_active:
+            prompt += 'You are currently in the chat phase. Before you make your game move, you can communicate with your opponent. You are generating a chat message.'
+        else:
+            prompt += 'You are currently in the chat phase. Even though it is your opponent\'s turn to make a game move, you can communicate with them. You are generating a chat message.'
+            
+    legal_moves = observations.get('legal_moves', [])
+    legal_move_str = ', '.join(legal_moves)
+    prompt += f'\nThe legal actions are: {legal_move_str}.'
 
     player_idx = observations.get("player_idx", 0)
     prompt = f"You are playing as Player {player_idx + 1}.\n" + prompt

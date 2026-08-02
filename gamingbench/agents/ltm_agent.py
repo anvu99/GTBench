@@ -491,17 +491,11 @@ Then, following this instruction:
             from gamingbench.utils.utils import strip_thinking_block
             
             thinking_enabled = getattr(self.model, 'enable_thinking', False)
-            retries = 0
-            while True:
-                generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-                raw_gen = generations[0]
-                has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
-                if not thinking_enabled or has_tag or retries >= 2:
-                    break
-                retries += 1
-                self.logger.warning(f"Missing thinking tag in window summarization, retrying ({retries}/2)...")
-                
-            if thinking_enabled and not has_tag:
+            generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+            raw_gen = generations[0]
+            
+            # The base agent handles retrying and will return an empty string if it failed completely
+            if thinking_enabled and not raw_gen:
                 self.logger.error("Failed to generate thinking tags for summarization after retries.")
                 summary = "Game/Opponent summary: [Summary failed]\n\nReasoning memory: [Reasoning failed]"
             else:
@@ -572,17 +566,11 @@ Then, following this instruction:
             from gamingbench.utils.utils import strip_thinking_block
             
             thinking_enabled = getattr(self.model, 'enable_thinking', False)
-            retries = 0
-            while True:
-                generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-                raw_gen = generations[0]
-                has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
-                if not thinking_enabled or has_tag or retries >= 2:
-                    break
-                retries += 1
-                self.logger.warning(f"Missing thinking tag in final summarization, retrying ({retries}/2)...")
-                
-            if thinking_enabled and not has_tag:
+            generations, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+            raw_gen = generations[0]
+            
+            # The base agent handles retrying and will return an empty string if it failed completely
+            if thinking_enabled and not raw_gen:
                 self.logger.error("Failed to generate thinking tags for final summarization after retries.")
                 summary = "Game/Opponent summary: [Summary failed]\n\nReasoning memory: [Reasoning failed]"
             else:

@@ -15,11 +15,28 @@ class FirstSealedAuction(OpenSpielGame):
         agent_action_list = [f'<{a}>' for a in agent_action_list]
         return agent_action_list
 
+    def _sample_chance_action(self, action_list, prob_list):
+        # Filter out 0 valuation if it exists
+        filtered_actions = []
+        filtered_probs = []
+        for a, p in zip(action_list, prob_list):
+            if a != 0:
+                filtered_actions.append(a)
+                filtered_probs.append(p)
+                
+        prob_sum = sum(filtered_probs)
+        if prob_sum > 0:
+            filtered_probs = [p / prob_sum for p in filtered_probs]
+            return np.random.choice(filtered_actions, p=filtered_probs)
+        return np.random.choice(action_list, p=prob_list)
+
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
         val = self.env.observation_string()
+        # Convert to int to prevent LLM from thinking it can bid floats like 0.5
+        val_int = int(float(val))
         return {
-            'board': f"Your private valuation: {val}",
-            'valuation': float(val)
+            'board': f"Your private valuation: {val_int}",
+            'valuation': val_int
         }
 
     def get_opponent_board_state(self, board_str):
@@ -27,7 +44,8 @@ class FirstSealedAuction(OpenSpielGame):
 
     def agent_action_to_openspiel(self, action):
         try:
-            bid = int(action[1:-1])
+            # Parse as float first to handle cases where LLM hallucinates <0.5>
+            bid = int(round(float(action[1:-1])))
             legal_actions = self.env.legal_actions(self.env.current_player())
             legal_actions = [int(l) for l in legal_actions]
             if bid in legal_actions:

@@ -11,6 +11,8 @@ from gamingbench.agents.sliding_window_agent import SlidingWindowAgent
 from gamingbench.agents.sliding_window_cot_agent import SlidingWindowCotAgent
 from gamingbench.agents.episodic_window_agent import EpisodicWindowAgent
 from gamingbench.agents.episodic_window_cot_agent import EpisodicWindowCotAgent
+from gamingbench.agents.evidence_memory_agent import EvidenceMemoryAgent
+from gamingbench.agents.proactive_query_agent import ProactiveQueryAgent
 
 from gamingbench.agents.ltm_cot_agent import LTMCotAgent
 from gamingbench.agents.expel_agent import ExpelAgent
@@ -34,6 +36,8 @@ __all__ = [
     "LTMCotAgent",
     "EpisodicWindowAgent",
     "EpisodicWindowCotAgent",
+    "EvidenceMemoryAgent",
+    "ProactiveQueryAgent",
     "ExpelAgent",
     "ExpelCotAgent",
     "ReasoningBankAgent",

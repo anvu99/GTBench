@@ -40,10 +40,12 @@ class LTMRAGStore:
         text_blocks = []
         for sig in signals:
             block = sig["text"]
-            if retrieval_log and sig["name"] in retrieval_log:
-                steps = retrieval_log[sig["name"]].get("steps", [])
+            if retrieval_log is not None:
+                steps = retrieval_log.get(sig["name"], {}).get("steps", [])
                 if steps:
                     block += f"\n- Retrieved in rounds: {steps}"
+                else:
+                    block += f"\n- Retrieved in rounds: None (This memory was NOT retrieved in any round of this game)"
             text_blocks.append(block)
             
         main_text = "\n\n".join(text_blocks)
@@ -147,6 +149,7 @@ class LTMRAGStore:
         If we hit the `max_examples` capacity, we evict the most similar existing example (redundancy),
         or the oldest one if they are all diverse.
         """
+        return # DISABLED for testing
         signals = self.get_signals(key)
         target_sig = next((s for s in signals if s["name"] == signal_name), None)
         if not target_sig:

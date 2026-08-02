@@ -119,6 +119,8 @@ class VLLMModel(BaseModel):
         
         gpu_memory_utilization = getattr(config, 'gpu_memory_utilization', 0.83)
         
+        max_num_seqs = getattr(config, 'max_num_seqs', 64)
+        
         engine_kwargs = {
             "tensor_parallel_size": tensor_parallel_size,
             "max_model_len": max_model_len,
@@ -129,6 +131,7 @@ class VLLMModel(BaseModel):
             "enable_chunked_prefill": True,
             "max_num_batched_tokens": 4096,
             "gpu_memory_utilization": gpu_memory_utilization,
+            "max_num_seqs": max_num_seqs,
         }
         
         # Initialize engine lazily or fetch singleton

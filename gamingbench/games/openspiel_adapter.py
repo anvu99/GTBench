@@ -41,10 +41,13 @@ class OpenSpielGame:
         self.logger.info(self.env.agent_selection)
         self.logger.info(self.env.action_spaces)
 
+    def _sample_chance_action(self, action_list, prob_list):
+        return np.random.choice(action_list, p=prob_list)
+
     def play(self, agent_list, model_list, tracker):
         self.status = "Normal"
         _match = GameMatch()
-        chat_channel = ChatChannel()
+        chat_channel = ChatChannel(window_size=4)
 
         # [LTM Integration] Initialize agent state for tracking
         for i, agent in enumerate(agent_list):
@@ -61,12 +64,20 @@ class OpenSpielGame:
         num_step = 0
         while not self.env.is_terminal():
             if self.env.is_chance_node():
-                # Chance node: sample an outcome
                 outcomes = self.env.chance_outcomes()
+                
+                if self.game_name == 'first_sealed_auction' and len(self.env.history()) > 2:
+                    # In first_sealed_auction, a chance node after bids resolves the winner.
+                    # If outcomes has length > 1, it means it was a tie and is randomly breaking it.
+                    # The user requested to treat ties as a draw.
+                    if len(outcomes) > 1:
+                        break
+                    
+                # Chance node: sample an outcome
                 num_actions = len(outcomes)
                 print("Chance node, got " + str(num_actions) + " outcomes")
                 action_list, prob_list = zip(*outcomes)
-                action = np.random.choice(action_list, p=prob_list)
+                action = self._sample_chance_action(action_list, prob_list)
                 print("Sampled outcome: ",
                       self.env.action_to_string(self.env.current_player(), action))
                 self.env.apply_action(action)
@@ -79,6 +90,9 @@ class OpenSpielGame:
                         player_idx = (round_idx + i) % self.env.num_players()
                         obs_dict = self.openspiel_observation_to_dict(player_idx, str(self.env))
                         obs_dict['env_name'] = self.game_name
+                        obs_dict['player_idx'] = player_idx
+                        obs_dict['is_chat_phase'] = True
+                        obs_dict['is_active_player'] = True
                         
                         legal_actions = self.env.legal_actions(player_idx)
                         obs_dict['openspiel_legal_actions'] = legal_actions
@@ -163,6 +177,9 @@ class OpenSpielGame:
                     # 1. Active player speaks
                     obs_dict_active = self.openspiel_observation_to_dict(player_idx, str(self.env))
                     obs_dict_active['env_name'] = self.game_name
+                    obs_dict_active['player_idx'] = player_idx
+                    obs_dict_active['is_chat_phase'] = True
+                    obs_dict_active['is_active_player'] = True
 
                     legal_actions_active = self.env.legal_actions(player_idx)
                     obs_dict_active['openspiel_legal_actions'] = legal_actions_active
@@ -181,6 +198,9 @@ class OpenSpielGame:
                     if peer_idx != player_idx:
                         obs_dict_peer = self.openspiel_observation_to_dict(peer_idx, str(self.env))
                         obs_dict_peer['env_name'] = self.game_name
+                        obs_dict_peer['player_idx'] = peer_idx
+                        obs_dict_peer['is_chat_phase'] = True
+                        obs_dict_peer['is_active_player'] = False
 
                         legal_actions_peer = self.env.legal_actions(peer_idx)
                         obs_dict_peer['openspiel_legal_actions'] = legal_actions_peer
@@ -216,6 +236,8 @@ class OpenSpielGame:
                 observation_dict['legal_moves'] = valid_action
                 observation_dict['env_name'] = self.game_name
                 observation_dict['player_idx'] = player_idx
+                observation_dict['is_chat_phase'] = False
+                observation_dict['is_active_player'] = True
                 observation_dict['chat_context'] = chat_channel.get_recent_window(player_idx) if all(getattr(a, "enable_chat", False) for a in agent_list) else ""
                 observation_dict['game_round'] = num_step + 1
                 
@@ -229,6 +251,9 @@ class OpenSpielGame:
                 self.quick_action_memory_for_llm[player_idx] = act
 
                 observation_dict.pop('state')
+                observation_dict['player_idx'] = player_idx
+                observation_dict['is_chat_phase'] = False
+                observation_dict['is_active_player'] = True
                 _step.set_observation(copy.deepcopy(observation_dict))
                 # _step.set_observation(observation_dict)
                 self.logger.info(

@@ -1,0 +1,13 @@
+agent_name: ProactiveQueryAgent
+num_generations: 1
+majority_vote: False
+batch_mode: True
+embed_model: Qwen/Qwen3-Embedding-0.6B
+embed_gpu_id: 1
+embed_max_length: 8192
+embed_instruction: "Given a game state summary and a strategic question about the opponent's behavior, find the most applicable strategic memory"
+embed_use_flash_attn: False
+in_game_top_k: 3
+post_game_top_k: 3
+max_evidence_per_memory: 6
+two_layer_store_path: proactive_query_store.json

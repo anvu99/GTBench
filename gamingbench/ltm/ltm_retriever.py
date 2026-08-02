@@ -82,8 +82,8 @@ class LTMRetriever:
             results.append({"signal": s, "score": 1.0})
             
         if self.index and self.embedder:
-            # The query_board is the current game state, so it gets the instruction prefix
-            query_vec = self.embedder.encode(query_board, is_query=True)
+            # The query_board is the current game state. We use is_query=False to maintain symmetric retrieval with raw board states.
+            query_vec = self.embedder.encode(query_board, is_query=False)
             query_vec = np.array(query_vec, dtype=np.float32)
             norm = np.linalg.norm(query_vec)
             if norm > 0:
@@ -138,12 +138,13 @@ class LTMRetriever:
         output_signals = []
         for sig in final_results:
             sig_copy = sig.copy()
-            if sig.get("examples") and self.embedder:
-                best_ex = self._find_best_example(sig["examples"], query_board)
-                if best_ex:
-                    safe_past_board = best_ex['board'].replace('--- ONGOING CHAT ---', '--- PAST CHAT HISTORY ---')
-                    example_text = f"\n\n  --------------------------------------------------------------------------------\n  [Historical Record] In a highly similar past situation, you successfully applied this strategy by taking the following action:\n\n  Past Board State:\n{safe_past_board}\n\n  Your Past Action: {best_ex['action']}\n  --------------------------------------------------------------------------------"
-                    sig_copy["text"] = sig_copy.get("text", "") + example_text
+            # DISABLED FOR TESTING
+            # if sig.get("examples") and self.embedder:
+            #     best_ex = self._find_best_example(sig["examples"], query_board)
+            #     if best_ex:
+            #         safe_past_board = best_ex['board'].replace('--- ONGOING CHAT ---', '--- PAST CHAT HISTORY ---')
+            #         example_text = f"\n\n  --------------------------------------------------------------------------------\n  [Historical Record] In a highly similar past situation, you successfully applied this strategy by taking the following action:\n\n  Past Board State:\n{safe_past_board}\n\n  Your Past Action: {best_ex['action']}\n  --------------------------------------------------------------------------------"
+            #         sig_copy["text"] = sig_copy.get("text", "") + example_text
             output_signals.append(sig_copy)
             
         return output_signals
@@ -156,8 +157,8 @@ class LTMRetriever:
         if not examples:
             return None
             
-        # We use is_query=True for the query board to match FAISS retrieval
-        query_vec = self.embedder.encode(query_board, is_query=True)
+        # We use is_query=False to maintain symmetric retrieval
+        query_vec = self.embedder.encode(query_board, is_query=False)
         best_sim = -1.0
         best_ex = None
         

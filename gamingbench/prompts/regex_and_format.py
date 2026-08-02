@@ -33,7 +33,8 @@ def get_step_env_regex_and_format(env_name, turn_type=None):
             regex = '(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>|<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
             format = '<Proposal|Utterance: [a, b, c]> e.g., <Proposal: [1, 2, 3]> <Utterance: [4, 2, 1]> or <agree>'
     elif env_name == 'first_sealed_auction':
-        regex = '<(?:[0-9]|10)>'
+        # Allow optional decimals in case the LLM hallucinates a float bid like <0.5>
+        regex = r'<(?:[0-9]+(?:\.[0-9]+)?|10)>'
         format = '<[0-9]|10>, e.g., <0>, <10>'
     elif env_name == 'kuhn_poker':
         regex = '(<Pass>|<Bet>)'

@@ -54,6 +54,15 @@ def get_args():
     return args
 
 
+def _get_agent_store_path(agent):
+    """Helper to extract the correct store path for any memory agent."""
+    return getattr(agent, 'ew_store_path', 
+           getattr(agent, 'sw_store_path', 
+           getattr(agent, 'ltm_store_path', 
+           getattr(agent, 'rules_store_path', 
+           getattr(agent, 'memory_bank_path', 
+           getattr(agent, 'store_path', None))))))
+
 def _get_memory_snapshot(agent):
     """Returns a serializable snapshot of the agent's memory."""
     if hasattr(agent, 'sw_store'):
@@ -93,6 +102,11 @@ def _get_memory_snapshot(agent):
     elif hasattr(agent, 'memory_bank'):
         return {
             'memory_bank': copy.deepcopy(agent.memory_bank)
+        }
+    elif hasattr(agent, 'store') and hasattr(agent.store, 'evidence'):
+        return {
+            'evidence': copy.deepcopy(agent.store.evidence),
+            'memories': copy.deepcopy(agent.store.memories)
         }
     return {}
 
@@ -144,6 +158,11 @@ def _restore_memory_snapshot(clone, snapshot):
         if 'memory_bank' in snapshot:
             clone.memory_bank = copy.deepcopy(snapshot['memory_bank'])
         clone.memory_bank_path = '/dev/null'
+    if hasattr(clone, 'store') and hasattr(clone.store, 'evidence'):
+        if 'evidence' in snapshot:
+            clone.store.evidence = copy.deepcopy(snapshot['evidence'])
+            clone.store.memories = copy.deepcopy(snapshot['memories'])
+        clone.store_path = '/dev/null'
 
 def clone_agent_for_batch(original_agent, memory_snapshot: dict):
     """Create an independent agent copy seeded with a frozen memory snapshot.
@@ -154,7 +173,7 @@ def clone_agent_for_batch(original_agent, memory_snapshot: dict):
     - Does NOT call set_storage_dir() — it never writes to disk (store_path='/dev/null').
     """
     clone = copy.deepcopy(original_agent)
-    clone._parent_store_path = getattr(original_agent, 'ew_store_path', getattr(original_agent, 'sw_store_path', getattr(original_agent, 'ltm_store_path', getattr(original_agent, 'rules_store_path', getattr(original_agent, 'memory_bank_path', None)))))
+    clone._parent_store_path = _get_agent_store_path(original_agent)
     
     if hasattr(original_agent, 'self_store_path'):
         clone._parent_self_store_path = original_agent.self_store_path
@@ -248,7 +267,7 @@ def run_game(game_name):
         batch_agents = []
         for a in agents:
             if hasattr(a, 'flush_batch_updates'):
-                store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None)))))
+                store_path = _get_agent_store_path(a)
                 if store_path and store_path not in seen_store_paths:
                     seen_store_paths.add(store_path)
                     batch_agents.append(a)
@@ -259,7 +278,7 @@ def run_game(game_name):
 
             # Freeze the current memory store state for all games in this batch
             memory_snapshots = {
-                getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None))))): _get_memory_snapshot(a) 
+                _get_agent_store_path(a): _get_memory_snapshot(a) 
                 for a in batch_agents
             }
 
@@ -269,7 +288,7 @@ def run_game(game_name):
                 fresh_agents = []
                 for a in agents:
                     if hasattr(a, 'flush_batch_updates'):
-                        store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None)))))
+                        store_path = _get_agent_store_path(a)
                         snap = memory_snapshots.get(store_path, _get_memory_snapshot(a))
                         fresh_agents.append(clone_agent_for_batch(a, snap))
                     else:
@@ -324,7 +343,7 @@ def run_game(game_name):
                     batch_agent.current_game_name = game_name.lower()
                     if not getattr(batch_agent, 'current_game_intro', None):
                         batch_agent.current_game_intro = construct_game_intro(game_name, game_config=game.config)
-                    store_path = getattr(batch_agent, 'ew_store_path', getattr(batch_agent, 'sw_store_path', getattr(batch_agent, 'ltm_store_path', getattr(batch_agent, 'rules_store_path', getattr(batch_agent, 'memory_bank_path', None)))))
+                    store_path = _get_agent_store_path(batch_agent)
                     
                     if store_path in flushed_paths:
                         continue

@@ -10,9 +10,7 @@ import json
 
 from concurrent.futures import ThreadPoolExecutor
 from box import Box
-from gamingbench import agents
-from gamingbench import games
-from gamingbench import models
+
 
 
 def get_game_config_path(game):
@@ -44,6 +42,7 @@ def get_game_config_path(game):
 
 
 def load_game(game_config_path):
+    from gamingbench import games
     game_config = Box.from_yaml(
         filename=game_config_path, Loader=yaml.FullLoader)
     return getattr(games, game_config.game_name)(game_config)
@@ -57,12 +56,14 @@ def load_config(config_path):
 
 
 def load_agent(agent_config_path, **kwargs):
+    from gamingbench import agents
     agent_config = Box.from_yaml(
         filename=agent_config_path, Loader=yaml.FullLoader)
     return getattr(agents, agent_config.agent_name)(agent_config, **kwargs)
 
 
 def load_model(model_config_path):
+    from gamingbench import models
     model_config = Box.from_yaml(
         filename=model_config_path, Loader=yaml.FullLoader)
     return getattr(models, model_config.model_type)(model_config)
@@ -125,6 +126,10 @@ def strip_thinking_block(text: str) -> str:
     elif '<thought>' in text:
         text = text.split('<thought>', 1)[0]
         
+    # Strip summary tags globally to prevent them leaking into chat/action channels
+    import re
+    text = re.sub(r"<summary>.*?</summary>", "", text, flags=re.DOTALL)
+    
     return text.strip()
 
 
@@ -148,6 +153,10 @@ def strip_chat_tags(text: str) -> str:
     text = re.sub(r'^(You|Opponent|Player \d+|Me):\s*', '', text, flags=re.IGNORECASE|re.MULTILINE)
     # Also strip wrapping quotes if they exist (e.g., You: "hello" -> hello)
     text = re.sub(r'^["\']|["\']$', '', text.strip())
+    # Strip summary tags globally to prevent them leaking into chat/action channels
+    import re
+    text = re.sub(r"<summary>.*?</summary>", "", text, flags=re.DOTALL)
+    
     return text.strip()
 
 

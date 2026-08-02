@@ -31,6 +31,8 @@ def construct_observation_prompt(observations):
     most_recent_proposal = observations['most_recent_proposal']
     most_recent_utterance = observations['most_recent_utterance']
     value_vector = observations['self_value_vector']
+    is_chat = observations.get('is_chat_phase', False)
+    is_active = observations.get('is_active_player', True)
 
     item_pool_prompt = f'There are {item_pool[0]} peppers, {item_pool[1]} strawberries, and {item_pool[2]} cherries in the item pool.'
 
@@ -38,52 +40,75 @@ def construct_observation_prompt(observations):
                    f'The value of each cherry is {value_vector[2]} for you.'
 
     if turn_type == 'Proposal':
+        prop_label = "Opponent's Proposal" if is_active else "Your Proposal"
+        utt_label = "Opponent's Utterance" if is_active else "Your Utterance"
+        
         if most_recent_utterance is not None:
-            last_utterance_prompt = f'Last time, the utterance of the opponent was to take ' \
+            last_utterance_prompt = f'Last time, {utt_label} was to take ' \
                                     f'{most_recent_utterance[0]} peppers, {most_recent_utterance[1]} strawberries, ' \
                                     f'and {most_recent_utterance[2]} cherries from the item pool.'
         else:
             last_utterance_prompt = ''
 
         if most_recent_proposal is not None:
-            last_proposal_prompt = f'Now, the opponent propose to take {most_recent_proposal[0]} peppers, ' \
+            last_proposal_prompt = f'Now, {prop_label} is to take {most_recent_proposal[0]} peppers, ' \
                                    f'{most_recent_proposal[1]} strawberries, and {most_recent_proposal[2]} cherries from the item pool.'
         else:
             last_proposal_prompt = ''
 
-        stage_prompt = _construct_propose_stage_prompt()
-        last_situation_prompt = '\n' + last_proposal_prompt + '\n' + last_utterance_prompt
         query_prompt = 'Now, it is your decision. ' \
-                       'If you find the proposal raised by the opponent is acceptable for both of you, you should output <Agree>. ' \
+                       'If you find the proposal raised by your partner is acceptable for both of you, you should output <Agree>. ' \
                        'Otherwise, you should output your proposal in the format <Proposal: [a, b, c]>.'
 
+        if is_chat:
+            if is_active:
+                stage_prompt = f"You are currently in the {turn_type} stage. Before you make your game move, you can communicate with your partner. You are generating a chat message."
+            else:
+                stage_prompt = f"You are currently in the {turn_type} stage. Even though it is your partner's turn to make a game move, you can communicate with them. You are generating a chat message."
+        else:
+            stage_prompt = _construct_propose_stage_prompt()
+
+        last_situation_prompt = '\n' + last_proposal_prompt + '\n' + last_utterance_prompt
+
     elif turn_type == 'Utterance':
+        prop_label = "Your Proposal" if is_active else "Opponent's Proposal"
+        utt_label = "Opponent's Utterance" if is_active else "Your Utterance"
+
         if most_recent_utterance is not None:
-            last_utterance_prompt = f'Last time, the utterance of the opponent was to take ' \
+            last_utterance_prompt = f'Last time, {utt_label} was to take ' \
                                     f'{most_recent_utterance[0]} peppers, {most_recent_utterance[1]} strawberries, ' \
                                     f'and {most_recent_utterance[2]} cherries from the item pool.'
         else:
             last_utterance_prompt = ''
 
         if most_recent_proposal is not None:
-            last_proposal_prompt = f'You proposed to take {most_recent_proposal[0]} peppers, ' \
+            last_proposal_prompt = f'Now, {prop_label} is to take {most_recent_proposal[0]} peppers, ' \
                                    f'{most_recent_proposal[1]} strawberries, and {most_recent_proposal[2]} cherries from the item pool.'
         else:
             last_proposal_prompt = ''
 
         enable_chat = observations.get('chat_enabled', False)
-        stage_prompt = _construct_utterance_stage_prompt(enable_chat=enable_chat)
-        last_situation_prompt = _construct_propose_stage_prompt() + '\n' + last_utterance_prompt + '\n' + last_proposal_prompt
+        
         query_prompt = 'Now, it is your turn to provide your utterance regarding the division of items. ' \
                        'You should output your utterance in the format <Utterance: [a, b, c]>.\n' \
                        'For each category, you can not take all the items in a category, i.e., you can not take all 5 Peppers, 5 Strawberries, or 5 Cherries. ' \
-                       'Instead, you have to leave at least one item for each category to your opponent.'
+                       'Instead, you have to leave at least one item for each category to your partner.'
+
+        if is_chat:
+            if is_active:
+                stage_prompt = f"You are currently in the {turn_type} stage. Before you make your game move, you can communicate with your partner. You are generating a chat message."
+            else:
+                stage_prompt = f"You are currently in the {turn_type} stage. Even though it is your partner's turn to make a game move, you can communicate with them. You are generating a chat message."
+            last_situation_prompt = '\n' + last_utterance_prompt + '\n' + last_proposal_prompt
+        else:
+            stage_prompt = _construct_utterance_stage_prompt(enable_chat=enable_chat)
+            last_situation_prompt = _construct_propose_stage_prompt() + '\n' + last_utterance_prompt + '\n' + last_proposal_prompt
     else:
         raise ValueError
 
     player_idx = observations.get("player_idx", 0)
     stage_prompt = f"You are playing as Player {player_idx + 1}.\n" + stage_prompt
-    return stage_prompt + '\n' + item_pool_prompt + '\n' + value_vector + '\n' + last_situation_prompt + '\n' + query_prompt
+    return stage_prompt + '\n' + item_pool_prompt + '\n' + value_vector + '\n' + last_situation_prompt + ('\n' + query_prompt if query_prompt else '')
 
 if __name__ == '__main__':
     observation = {

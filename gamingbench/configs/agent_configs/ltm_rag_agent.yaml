@@ -6,12 +6,12 @@ batch_mode: False
 embed_model: Qwen/Qwen3-Embedding-0.6B
 embed_gpu_id: 1
 embed_max_length: 8192
-embed_instruction: "Given a game board state, retrieve the most relevant past game signals or strategies"
+embed_instruction: "Given a current game board state, find the most applicable past signal or strategy for this situation"
 embed_use_flash_attn: False
 self_ltm_threshold: 0.0
-self_ltm_max: 3
-opp_top_k: 1
-proac_top_k: 1
+self_ltm_max: 4
+opp_top_k: 4
+proac_top_k: 4
 opp_store_path: opp_ltm_rag.json
 self_store_path: self_ltm_rag.json
 proactive_store_path: proactive_ltm_rag.json

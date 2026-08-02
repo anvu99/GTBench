@@ -61,13 +61,28 @@ class PromptAgent(BaseAgent):
         
         try:
             from gamingbench.utils.utils import strip_thinking_block, strip_chat_tags
-            responses, query = self.llm_query(msgs, n=1, stop=None, prompt_type='move')
-            message = strip_thinking_block(responses[0]).strip()
-            message = strip_chat_tags(message)
-            self.logger.info(f'Chat Prompt: {observation_prompt}')
-            self.logger.info(f'Chat Raw Response: {responses}')
-            self.logger.info(f"Chat Generated: {message}")
+            max_retries = 3
+            message = ""
+            for attempt in range(max_retries):
+                responses, query = self.llm_query(msgs, n=1, stop=None, prompt_type='move')
+                message = strip_thinking_block(responses[0]).strip()
+                message = strip_chat_tags(message)
+                
+                if attempt == 0:
+                    self.logger.info(f'Chat Prompt: {msgs[1]["content"]}')
+                self.logger.info(f'Chat Raw Response (Attempt {attempt+1}): {responses}')
+                
+                if message:
+                    self.logger.info(f"Chat Generated: {message}")
+                    return message, query
+                else:
+                    error_msg = "Failed to extract a valid chat message. You must output a non-empty message wrapped by <chat>...</chat>. Please try again."
+                    if attempt < max_retries - 1:
+                        self.logger.warning(error_msg)
+                        msgs.append({"role": "assistant", "content": responses[0]})
+                        msgs.append({"role": "user", "content": error_msg})
             
+            self.logger.info(f"Chat Generated (Empty Fallback): {message}")
             return message, query
         except Exception as e:
             self.logger.error(f"Chat generation failed: {e}")
@@ -97,18 +112,46 @@ class PromptAgent(BaseAgent):
         msgs = self.construct_init_messages(
             system_prompt, observation_prompt)
 
-        responses, query = self.llm_query(
-            msgs, n=self.num_generations, stop=None, prompt_type='move')
-        query_list.append(query)
+        valid_moves = observations.get('legal_moves', [])
+        max_retries = 3
+        move = ""
 
-        self.logger.info(f'Prompt: {observation_prompt}')
-        self.logger.info(f'Response: {responses}')
+        for attempt in range(max_retries):
+            responses, query = self.llm_query(
+                msgs, n=self.num_generations, stop=None, prompt_type='move')
+            query_list.append(query)
 
-        moves = self.parse_with_regex(responses, regex)
-        if len(moves) != 0:
-            move = self.post_processing(moves, majority_vote=False)
-        else:
-            move = ""
+            if attempt == 0:
+                self.logger.info(f'Prompt: {msgs[1]["content"]}')
+            self.logger.info(f'Response (Attempt {attempt+1}): {responses}')
+
+            moves = self.parse_with_regex(responses, regex)
+            if len(moves) != 0:
+                move = self.post_processing(moves, majority_vote=getattr(self, "voting", False))
+                
+                # Normalize brackets and asterisks from move and valid_moves list to handle potential mismatch
+                def clean_action(act):
+                    return act.replace('<', '').replace('>', '').replace('*', '').strip()
+                cleaned_move = clean_action(move)
+                matched_valid_move = None
+                for m in valid_moves:
+                    if clean_action(m) == cleaned_move:
+                        matched_valid_move = m
+                        break
+                if not valid_moves or matched_valid_move is not None:
+                    if matched_valid_move is not None:
+                        move = matched_valid_move
+                    break
+                else:
+                    error_msg = f"Invalid move '{move}'. Your move must be one of the legal actions: {valid_moves}. Please try again."
+            else:
+                move = ""
+                error_msg = f"Failed to extract a valid move format. You must output your action wrapped by <>, i.e., <[a-c][1-8]->[a-c][1-8]>. Legal actions: {valid_moves}. Please try again."
+            
+            if attempt < max_retries - 1:
+                self.logger.warning(error_msg)
+                msgs.append({"role": "assistant", "content": responses[0]})
+                msgs.append({"role": "user", "content": error_msg})
 
         self.logger.info('-' * 20 + f'{self.agent_name} End' + '-' * 20)
         return move, query_list

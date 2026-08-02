@@ -14,15 +14,22 @@ def _construct_head_prompt():
 
 def construct_observation_prompt(observations):
 
-    legal_moves = observations['legal_moves']
     valuation = observations['valuation']
-    legal_move_str = ', '.join(legal_moves)
+    is_chat = observations.get('is_chat_phase', False)
+    is_active = observations.get('is_active_player', True)
 
     prompt = f'Now, you are in an auction with an opponent. Your budget (valuation) for the object is {valuation}. Your bid must be strictly lower than or equal to {valuation}. ' \
              f'You shall bid wisely against your opponent to maximize your expected utility. \n' \
-             f'Your opponent also has a private budget and you do not know it.' \
-             f'\n\n' \
-             f'The legal actions are: {legal_move_str}. '
+             f'Your opponent also has a private budget randomly drawn from the uniform distribution [1, 10] and you do not know it.' \
+             f'\n\n'
+
+    if is_chat:
+        prompt += 'You are currently in the chat phase. Before you make your simultaneous game move, you can communicate with your opponent. You are generating a chat message.'
+        
+    legal_moves = observations.get('legal_moves', [])
+    legal_move_str = ', '.join(legal_moves)
+    prompt += f'\nThe legal actions are: {legal_move_str}.'
+        
     player_idx = observations.get("player_idx", 0)
     prompt = f"You are playing as Player {player_idx + 1}.\n" + prompt
     return prompt

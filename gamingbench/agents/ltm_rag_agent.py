@@ -244,6 +244,7 @@ class LTMRAGAgent(PromptAgent):
 
         # This list will hold all retrieved memory texts to be injected into the LLM context
         injections = []
+        import re
         
         # 1. Proactive LTM (General Strategies)
         proac_signals = self.proac_store.get_signals("__overall__")
@@ -258,9 +259,9 @@ class LTMRAGAgent(PromptAgent):
                     entry = self.retrieval_log.setdefault(sig["name"], {"text": sig["text"], "steps": [], "source": "Proactive Strategy"})
                     entry["steps"].append((current_round, type_filter))
                 
-                # Format the retrieved texts into a single block
-                texts = [s["text"] for s in retrieved]
-                text_blob = "\n\n********************************************************************************\n\n".join(texts)
+                # Format the retrieved texts into a single block, stripping the Type field since the agent doesn't need to see it
+                texts = [re.sub(r'^\s*-\s*Type:\s*(?:Action|Chat)\s*\n', '', s["text"], flags=re.MULTILINE) for s in retrieved]
+                text_blob = "\n\n---\n\n".join(texts)
                 from gamingbench.ltm.rag_prompts import PROACTIVE_LTM_INJECTION_PROMPT
                 injections.append(PROACTIVE_LTM_INJECTION_PROMPT.format(proactive_ltm_text=text_blob))
 
@@ -276,11 +277,10 @@ class LTMRAGAgent(PromptAgent):
                     for sig in retrieved:
                         entry = self.retrieval_log.setdefault(sig["name"], {"text": sig["text"], "steps": [], "source": "Opponent Reputation"})
                         entry["steps"].append((current_round, type_filter))
-                    texts = [s["text"] for s in retrieved]
-                    text_blob = "\n\n********************************************************************************\n\n".join(texts)
-                    peer_id = self.current_opponent_key.split(':')[0] if ':' in self.current_opponent_key else self.current_opponent_key
+                    texts = [re.sub(r'^\s*-\s*Type:\s*(?:Action|Chat)\s*\n', '', s["text"], flags=re.MULTILINE) for s in retrieved]
+                    text_blob = "\n\n---\n\n".join(texts)
                     from gamingbench.ltm.rag_prompts import LTM_INJECTION_PROMPT
-                    injections.append(LTM_INJECTION_PROMPT.format(opponent_id=peer_id, ltm_text=text_blob))
+                    injections.append(LTM_INJECTION_PROMPT.format(ltm_text=text_blob))
                     
         # 3. Self LTM (Personal Risks and Flaws)
         self_signals = self.self_store.get_signals("__self__")
@@ -294,26 +294,99 @@ class LTMRAGAgent(PromptAgent):
                 for sig in retrieved:
                     entry = self.retrieval_log.setdefault(sig["name"], {"text": sig["text"], "steps": [], "source": "Self Reputation"})
                     entry["steps"].append((current_round, type_filter))
-                texts = [s["text"] for s in retrieved]
-                text_blob = "\n\n********************************************************************************\n\n".join(texts)
+                texts = [re.sub(r'^\s*-\s*Type:\s*(?:Action|Chat)\s*\n', '', s["text"], flags=re.MULTILINE) for s in retrieved]
+                text_blob = "\n\n---\n\n".join(texts)
                 from gamingbench.ltm.rag_prompts import SELF_LTM_INJECTION_PROMPT
                 injections.append(SELF_LTM_INJECTION_PROMPT.format(self_ltm_text=text_blob))
                 
         if injections:
-            injection_str = "\n\n".join(injections)
+            from gamingbench.ltm.rag_prompts import UNIFIED_MEMORY_PREAMBLE
+            # Build the memory overview list for the preamble
+            memory_overview_lines = []
+            if any("PROACTIVE MEMORY" in inj for inj in injections):
+                memory_overview_lines.append("\n  - Proactive Memory: The most direct strategies and objectives to actively achieve your main game target.")
+            if any("REACTIVE MEMORY" in inj for inj in injections):
+                memory_overview_lines.append("\n  - Reactive Memory: Strategies to defend against or counter specific behavioral patterns observed in this opponent.")
+            if any("VERIFICATION MEMORY" in inj for inj in injections):
+                memory_overview_lines.append("\n  - Verification Memory: Essential safety checks to verify you are not falling into your own recurring mistakes.")
+            memory_overview = "".join(memory_overview_lines)
+            preamble = UNIFIED_MEMORY_PREAMBLE.format(memory_overview=memory_overview)
+            
+            injection_str = preamble + "\n" + "\n\n".join(injections)
             from gamingbench.prompts.observation_prompts import construct_game_intro
             env_name = observations['env_name']
             game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
             # Inject after game_intro
             observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + injection_str, 1)
 
+
+        action_type = "chat message" if is_chat else "move"
+        step_prompt = (
+            f"As you reason through your {action_type}, please generate a summary of your internal thinking "
+            f"regarding the game state. Explicitly detail how you used any provided proactive and reactive memory "
+            f"to form your strategy, and how you used the verification memory to check your candidate {action_type}.\n\n"
+            f"[Final Decision] Conclude your final {action_type} (You will output this in the required format later)."
+        )
+        
+        observation_prompt += "\n\n" + step_prompt
+
         return system_prompt, observation_prompt
+
+
+    def construct_init_messages(self, system_prompt, user_prompt):
+        # 1. Strip the conflicting instruction globally
+        user_prompt = user_prompt.replace("Do NOT output internal reasoning.", "")
+        user_prompt = user_prompt.replace("do NOT output internal reasoning.", "")
+        user_prompt = user_prompt.replace("and do NOT output internal reasoning.", "")
+        user_prompt = user_prompt.replace("do not output internal reasoning.", "")
+        user_prompt = user_prompt.replace("Please return your answer without explanation!", "")
+        
+        # 2. Extract the CoT block
+        import re
+        cot_pattern = r"(As you reason through your.*?(?:\[Final Decision\][^\n]*))"
+        match_cot = re.search(cot_pattern, user_prompt, re.DOTALL)
+        
+        # 3. Extract the Final Instruction block
+        if getattr(self, "_in_chat_step", False):
+            final_inst_pattern = r"(Before making your next game move.*?)$"
+        else:
+            final_inst_pattern = r"(Your output must be in the following format:.*?)$"
+        match_final = re.search(final_inst_pattern, user_prompt, re.DOTALL)
+        
+        if match_cot and match_final:
+            cot_text = match_cot.group(1).strip()
+            final_text = match_final.group(1).strip()
+            
+            # Clean up redundant phrasing from final_text to avoid confusing the LLM
+            final_text = re.sub(r"You must choose an legal action to set up advantages\.?\s*", "", final_text, flags=re.IGNORECASE)
+            final_text = re.sub(r"Your output must be in the following format:\s*", "", final_text, flags=re.IGNORECASE)
+            final_text = final_text.strip()
+            
+            # Remove both from their original positions
+            user_prompt = user_prompt.replace(match_cot.group(0), "")
+            user_prompt = user_prompt.replace(match_final.group(0), "")
+            
+            # Clean up excess newlines
+            user_prompt = re.sub(r'\n{3,}', '\n\n', user_prompt)
+            
+            output_type = "chat message" if getattr(self, "_in_chat_step", False) else "action"
+            # Construct the unified block
+            unified_block = (
+                f"{cot_text}\n\n"
+                "After your reasoning concludes, you MUST output EXACTLY two things, in this specific order:\n"
+                "1. A concise summary (max 4 sentences) describing the opponent's recent behavior and which memories influenced your decision, wrapped in <summary>...</summary> tags.\n"
+                f"2. The final {output_type}, formatted exactly as required below:\n\n"
+                f"{final_text}\n"
+            )
+            
+            user_prompt = user_prompt.strip() + "\n\n" + unified_block
+            
+        return super().construct_init_messages(system_prompt, user_prompt)
 
     def chat_step(self, observations, chat_history_str: str):
         """
         Executes a chat turn for the agent.
-        Logs the chat action to the current trajectory and captures the agent's internal 
-        reasoning for later window summarization.
+        Extracts the inline window summary from the reasoning process and logs it.
         """
         # Temporarily flag that we are in a chat context so _build_prompts retrieves chat-specific memories
         # Set context flag to trigger chat-specific memory retrieval
@@ -321,13 +394,18 @@ class LTMRAGAgent(PromptAgent):
         message, query = super().chat_step(observations, chat_history_str)
         self._in_chat_step = False
         
-        # If the underlying prompt agent queried the LLM, we extract the raw text output 
-        # (which includes the <think> blocks) and save it. We'll feed this to the window summarizer.
+        # Extract the inline summary from the agent's generation and save it
         if query:
             if hasattr(query, 'llm_output') and query.llm_output:
                 raw_resp = query.llm_output[-1] if isinstance(query.llm_output, list) else str(query.llm_output)
-                curr_round = observations.get('game_round', self.move_count + 1)
-                self.recent_internal_reasoning.append(f"### [ROUND {curr_round} - CHAT PHASE REASONING]\n{raw_resp}")
+                import re
+                matches = re.findall(r"<summary>(.*?)</summary>", raw_resp, re.DOTALL)
+                if matches:
+                    summary_text = matches[-1].strip()
+                    curr_round = observations.get('game_round', self.move_count + 1)
+                    if not hasattr(self, 'window_summaries'):
+                        self.window_summaries = []
+                    self.window_summaries.append(f"Round {curr_round} (Chat):\n{summary_text}")
         
         # Store the exact index of this round's observation so the Gradient Engine can anchor to it later
         current_round = observations.get('game_round')
@@ -345,26 +423,25 @@ class LTMRAGAgent(PromptAgent):
     def step(self, observations):
         """
         Executes an action turn for the agent.
-        Tracks the move in the current trajectory. If the `summarize_every` interval is hit, 
-        it triggers a background window summarization of the recent steps to compress the game history.
+        Extracts the inline window summary from the reasoning process and logs it.
         """
         self._in_chat_step = False
         self.move_count += 1
         
-        # Window summarization
         query_list = []
-        if self.move_count > 1 and (self.move_count - 1) % self.summarize_every == 0:
-            sum_query = self._run_window_summarization()
-            if sum_query:
-                query_list.append(sum_query)
-
         move, sub_query_list = super().step(observations)
         if sub_query_list:
             for q in sub_query_list:
                 if hasattr(q, 'llm_output') and q.llm_output:
                     raw_resp = q.llm_output[-1] if isinstance(q.llm_output, list) else str(q.llm_output)
-                    curr_round = observations.get('game_round', self.move_count)
-                    self.recent_internal_reasoning.append(f"### [ROUND {curr_round} - ACTION PHASE REASONING]\n{raw_resp}")
+                    import re
+                    matches = re.findall(r"<summary>(.*?)</summary>", raw_resp, re.DOTALL)
+                    if matches:
+                        summary_text = matches[-1].strip()
+                        curr_round = observations.get('game_round', self.move_count)
+                        if not hasattr(self, 'window_summaries'):
+                            self.window_summaries = []
+                        self.window_summaries.append(f"Round {curr_round} (Action):\n{summary_text}")
             query_list.extend(sub_query_list)
             
         current_round = observations.get('game_round')
@@ -377,117 +454,6 @@ class LTMRAGAgent(PromptAgent):
             self.current_trajectory_actions.append("[Move] (None)")
             
         return move, query_list
-
-    def _run_window_summarization(self, window_size=None):
-        """
-        Compresses a recent window of the game into a concise textual summary.
-        This summary includes all game states from the window, the agent's internal reasoning, 
-        and which memories were retrieved.
-        """
-        # Determine how many moves constitute a summary window
-        if window_size is None:
-            history_start = getattr(self, '_last_summary_idx', 0)
-        else:
-            history_start = max(0, len(self.current_trajectory_observations) - window_size)
-            
-        self._last_summary_idx = len(self.current_trajectory_observations)
-        
-        # Loop through the log of retrieved memories to see which ones fired during this window
-        window_log = []
-        for sig_name, data in self.retrieval_log.items():
-            # Filter for retrieval steps that occurred inside this current time window
-            window_steps = []
-            for s in data["steps"]:
-                if isinstance(s, tuple) and s[0] >= history_start:
-                    window_steps.append(f"{s[0]} ({s[1]})")
-                elif isinstance(s, int) and s >= history_start:
-                    window_steps.append(str(s))
-            if window_steps:
-                # Format the fired signal into a string, noting exactly which step triggered it
-                window_log.append(f"--- Signal: {sig_name} ---\n{data['text']}\n(Retrieved at steps: [{', '.join(window_steps)}])\n")
-                
-        # Combine all fired signals into one block, or note if nothing fired
-        retrieval_log_str = "\n".join(window_log) if window_log else "No signals retrieved this window."
-        
-        # Collect all board states in the window
-        board_states_text = ""
-        for i in range(history_start, len(self.current_trajectory_observations)):
-            obs_item = self.current_trajectory_observations[i]
-            if isinstance(obs_item, dict):
-                round_num = obs_item.get("round", i + 1)
-                phase = obs_item.get("phase", "Action")
-                state_str = obs_item.get("state", "")
-                board_states_text += f"--- STATE AT ROUND {round_num} ({phase}) ---\n"
-                board_states_text += state_str + "\n\n"
-            else:
-                round_num = i + 1
-                board_states_text += f"--- STATE AT ROUND {round_num} ---\n"
-                board_states_text += obs_item + "\n\n"
-            
-        # Start constructing the prompt: show the board states and append the summary instructions
-        prompt = f"================================================================================\n# GAME STATES FOR THIS WINDOW\n{board_states_text}\n================================================================================\n\n"
-        prompt += WINDOW_SUMMARIZE_PROMPT.format(K=window_size)
-        
-        # Inject the agent's raw <think> blocks from the past X turns so the summarizer remembers WHY actions were taken
-        if getattr(self, 'recent_internal_reasoning', []):
-            prompt += "\n\n================================================================================\n# YOUR RECENT INTERNAL REASONING\n\n" + "\n\n".join(self.recent_internal_reasoning) + "\n================================================================================"
-            # Clear the list to start fresh for the next window
-            self.recent_internal_reasoning.clear()
-            
-        # Append the log of which memories fired so the summarizer can evaluate if they were helpful
-        prompt += f"\n\n================================================================================\n# SIGNALS RETRIEVED THIS WINDOW\n{retrieval_log_str}\n================================================================================\n"
-
-        # Format the prompt using the game rules as the system message
-        system_prompt = getattr(self, "current_game_intro", "")
-        msgs = self.construct_init_messages(system_prompt, prompt)
-
-        try:
-            from gamingbench.utils.utils import strip_thinking_block
-            thinking_enabled = getattr(self.model, 'enable_thinking', False)
-            retries = 0
-            while True:
-                # Send the summarization request to the LLM API
-                responses, query = self.llm_query(msgs, n=1, stop=None, prompt_type='plan')
-                raw_gen = responses[0]
-                has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
-                if not thinking_enabled or has_tag or retries >= 2:
-                    break
-                retries += 1
-                self.logger.warning(f"Missing thinking tag in window summarization, retrying ({retries}/2)...")
-                
-            if thinking_enabled and not has_tag:
-                self.logger.error("Failed to generate thinking tags for window summarization after retries.")
-                summary = "Round summarization failed."
-            else:
-                # Remove any <think> blocks from the final summary output
-                summary = strip_thinking_block(raw_gen).strip()
-            
-            # Extract the actual OpenSpiel round numbers from the start and end of this window
-            start_obs = self.current_trajectory_observations[history_start]
-            start_round = start_obs.get("round", history_start + 1) if isinstance(start_obs, dict) else history_start + 1
-            
-            end_obs = self.current_trajectory_observations[-1]
-            end_round = end_obs.get("round", len(self.current_trajectory_observations)) if isinstance(end_obs, dict) else len(self.current_trajectory_observations)
-            
-            # Label the summary with its exact round range and save it
-            self.window_summaries.append(f"Round {start_round} to {end_round}:\n{summary}")
-            
-            # Trace Logging
-            if getattr(self, 'current_opponent_key', None):
-                import os
-                store_path = getattr(self, '_parent_store_path', getattr(self, 'opp_store_path', 'default.json'))
-                log_file = os.path.join(os.path.dirname(store_path), "window_summaries.log")
-                with _trace_log_lock:
-                    with open(log_file, "a") as f:
-                        f.write(f"=== GAME {getattr(self, 'game_count', 0)} WINDOW SUMMARIZATION (Rounds {history_start + 1} to {len(self.current_trajectory_observations)}) ===\n")
-                        f.write(f"SYSTEM PROMPT:\n{system_prompt}\n")
-                        f.write(f"USER PROMPT:\n{prompt}\n")
-                        f.write(f"RESPONSE:\n{summary}\n")
-                        f.write("=" * 50 + "\n\n")
-            return query
-        except Exception as e:
-            self.logger.error(f"Summarization failed: {e}")
-            return None
 
     def post_game_update(self, game_history, final_board_state, env_name):
         """
@@ -506,10 +472,7 @@ class LTMRAGAgent(PromptAgent):
         if player_index is not None:
             game_history = game_history.replace(f"Player {player_index}", "You")
         
-        # 4. Run one last dynamic Window Summarization to compress any leftover, unsummarized tail-end moves
-        unsummarized_count = len(self.current_trajectory_observations) - getattr(self, '_last_summary_idx', 0)
-        if unsummarized_count > 0:
-            self._run_window_summarization(window_size=unsummarized_count)
+        # 3. No final window summarization needed since summaries are extracted inline during actions.
         
         # Combine all the smaller window summaries into one master summary string for the Gradient Engine
         summaries_text = "\n\n".join(self.window_summaries) if self.window_summaries else "No window summaries generated."
@@ -785,7 +748,7 @@ class LTMRAGAgent(PromptAgent):
         # - `(?=...)`        : Positive Lookahead assertion. It means "split here only IF what follows matches this pattern", but crucially it DOES NOT consume the matched text. This ensures the bullet point and "Signal:" prefix remain attached to the resulting string chunk, rather than being deleted by the split operation.
         # - `(?:[-*+•]\s*)?` : Matches an OPTIONAL bullet point character (-, *, +, or •) followed by whitespace.
         # - `(?:Signal|...)` : Matches the various label prefixes the LLM might hallucinate.
-        blocks = re.split(r'\n(?=(?:[-*+•]\s*)?(?:Signal|Strategy Name|Strategy|Name):)', "\n" + main_db, flags=re.IGNORECASE)
+        blocks = re.split(r'\n(?=(?:[-*+•]\s*)?(?:Check|Signal|Strategy Name|Strategy|Name):)', "\n" + main_db, flags=re.IGNORECASE)
             
         if "no signals currently stored" not in main_db.lower() and "no strategies currently stored" not in main_db.lower() and len([b for b in blocks if b.strip()]) == 0:
             self.logger.warning(f"Synthesis returned 0 parseable signals for {key}, but did not explicitly declare the database empty. Potential formatting hallucination.")
@@ -796,7 +759,7 @@ class LTMRAGAgent(PromptAgent):
             if not b:
                 continue
                 
-            match = re.match(r'(?:[-*+•]\s*)?(?:Signal|Strategy Name|Strategy|Name):\s*(.*)', b, flags=re.IGNORECASE)
+            match = re.match(r'(?:[-*+•]\s*)?(?:Check|Signal|Strategy Name|Strategy|Name):\s*(.*)', b, flags=re.IGNORECASE)
             if not match:
                 continue
                 
@@ -848,7 +811,7 @@ class LTMRAGAgent(PromptAgent):
                         # - `^`                    : Anchors the match strictly to the start of the string.
                         # - `(?:\[?[A-Z]+\]?\s*)?` : Matches optional gradient tags like "[ADD]", "ADD", or "[MODIFY]" followed by whitespace.
                         # - `\[?(?:Signal...):\s*` : Matches the literal "Signal:" label along with optional stray brackets.
-                        clean_old = re.sub(r'^(?:\[?[A-Z]+\]?\s*)?\[?(?:Strategy|Signal|Strategies|Signals):\s*', '', old_name, flags=re.IGNORECASE)
+                        clean_old = re.sub(r'^(?:\[?[A-Z]+\]?\s*)?\[?(?:Check|Strategy|Signal|Strategies|Signals):\s*', '', old_name, flags=re.IGNORECASE)
                         
                         # Regex `r'\s*\[Game \d+\]\s*'` explanation:
                         # Matches and removes game identifiers like " [Game 1]" along with any surrounding whitespace.
@@ -890,7 +853,7 @@ class LTMRAGAgent(PromptAgent):
             inherited_names = set()
             for source_name in source_names:
                 import re
-                clean_source = re.sub(r'^(?:\[?[A-Z]+\]?\s*)?\[?(?:Strategy|Signal|Strategies|Signals):\s*', '', source_name, flags=re.IGNORECASE)
+                clean_source = re.sub(r'^(?:\[?[A-Z]+\]?\s*)?\[?(?:Check|Strategy|Signal|Strategies|Signals):\s*', '', source_name, flags=re.IGNORECASE)
                 clean_source = re.sub(r'\s*\[Game \d+\]\s*', '', clean_source, flags=re.IGNORECASE)
                 clean_source = clean_source.strip(' []')
                 
@@ -904,20 +867,22 @@ class LTMRAGAgent(PromptAgent):
                         import copy
                         if "centroids" in old_sig:
                             sig["centroids"].extend(copy.deepcopy(old_sig["centroids"]))
-                        if "examples" in old_sig:
-                            sig["examples"].extend(copy.deepcopy(old_sig["examples"]))
+                        # DISABLED FOR TESTING: Do not propagate examples
+                        # if "examples" in old_sig:
+                        #     sig["examples"].extend(copy.deepcopy(old_sig["examples"]))
                     elif not old_sig:
                         if "[ADD]" not in source_name.upper() and "[GAME " not in source_name.upper():
-                            self.logger.warning(f"Source signal '{split_src}' not found in old database. No historical centroids inherited for '{name}'.")
+                            self.logger.warning(f"Source signal '{split_src}' (parsed from raw LLM output '{source_name}') not found in old database. No historical centroids inherited for '{name}'.")
                         
             if len(sig["centroids"]) > 5:
                 self.logger.info(f"Compressing centroids for '{name}' in {key} from {len(sig['centroids'])} down to 5.")
             while len(sig["centroids"]) > 5:
                 store._merge_closest_centroids(sig["centroids"])
                 
-            if "examples" in sig and len(sig["examples"]) > 5:
-                # Bounding examples: if a merge caused it to exceed the limit, keep the 5 most recent
-                sig["examples"] = sig["examples"][-5:]
+            # DISABLED FOR TESTING
+            # if "examples" in sig and len(sig["examples"]) > 5:
+            #     # Bounding examples: if a merge caused it to exceed the limit, keep the 5 most recent
+            #     sig["examples"] = sig["examples"][-5:]
                 
             if not sig.get("centroids"):
                 sig.pop("centroids", None)
@@ -944,6 +909,7 @@ class LTMRAGAgent(PromptAgent):
                     # calculate the cosine similarity against this centroid to retrieve this strategy.
                     if tag in ["[ADD]", "[MODIFY]", "[MERGE]"]:
                         # Embed using shared embedder (document side, so is_query=False)
+                        # We strictly embed the raw board state to maintain symmetric retrieval.
                         vec = self.embedder.encode(anchor_board, is_query=False)
                         store.add_centroid(key, name, vec)
                     
