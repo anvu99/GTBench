@@ -406,7 +406,8 @@ class OpenSpielGame:
                         f"[Player Context] You play as Player {agent_idx + 1}. "
                         f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your private valuation. "
-                        f"Format: Your private valuation: x.\n\n"
+                        f"Format: Your private valuation: x.\n"
+                        f"Note: This is a simultaneous bidding game. Both players submitted their bids at the exact same time without knowing each other's bids.\n\n"
                     )
                 else:
                     you_num = 1 if agent_idx == 0 else 2
@@ -553,7 +554,8 @@ class OpenSpielGame:
                         f"[Player Context] You play as Player {agent_idx + 1}. "
                         f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your private valuation. "
-                        f"Format: Your private valuation: x.\n\n"
+                        f"Format: Your private valuation: x.\n"
+                        f"Note: This is a simultaneous bidding game. Both players submitted their bids at the exact same time without knowing each other's bids.\n\n"
                     )
                 else:
                     you_num = 1 if agent_idx == 0 else 2

@@ -31,7 +31,8 @@ def construct_observation_prompt(observations):
     item_pool_prompt = f'There are {item_pool[0]} peppers, {item_pool[1]} strawberries, and {item_pool[2]} cherries in the item pool.'
 
     value_vector = f'The value of each pepper is {value_vector[0]} for you. The value of each strawberry is {value_vector[1]} for you. ' \
-                   f'The value of each cherry is {value_vector[2]} for you.'
+                   f'The value of each cherry is {value_vector[2]} for you. ' \
+                   f'Your opponent\'s values of each item are unknown to you, and you should try your best to find their desire to play strategically to maximize your utility.'
 
     if turn_type == 'Proposal':
         prop_label = "Opponent's Proposal" if is_active else "Your Proposal"
@@ -50,9 +51,14 @@ def construct_observation_prompt(observations):
         else:
             last_proposal_prompt = ''
 
-        query_prompt = 'Now, it is your decision. ' \
-                       'If you find the proposal raised by the opponent is acceptable, you should output <Agree>. ' \
-                       'Otherwise, you should output your proposal in the format <Proposal: [a, b, c]>.'
+        if most_recent_proposal is None:
+            query_prompt = 'Now, it is your decision. ' \
+                           'Since there is no proposal from the opponent yet, you cannot output <Agree>. ' \
+                           'You must output your proposal in the format <Proposal: [a, b, c]>.'
+        else:
+            query_prompt = 'Now, it is your decision. ' \
+                           'If you find the proposal raised by the opponent is acceptable, you should output <Agree>. ' \
+                           'Otherwise, you should output your proposal in the format <Proposal: [a, b, c]>.'
         
         if is_chat:
             if is_active:

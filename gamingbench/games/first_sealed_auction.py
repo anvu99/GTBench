@@ -31,12 +31,14 @@ class FirstSealedAuction(OpenSpielGame):
         return np.random.choice(action_list, p=prob_list)
 
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):
-        val = self.env.observation_string()
+        val = self.env.observation_string(current_player_idx)
         # Convert to int to prevent LLM from thinking it can bid floats like 0.5
         val_int = int(float(val))
+        past_moves = self.quick_action_memory_for_llm.get(current_player_idx, [])
         return {
             'board': f"Your private valuation: {val_int}",
-            'valuation': val_int
+            'valuation': val_int,
+            'self_moves': past_moves
         }
 
     def get_opponent_board_state(self, board_str):

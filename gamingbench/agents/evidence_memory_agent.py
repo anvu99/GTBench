@@ -499,7 +499,7 @@ class EvidenceMemoryAgent(PromptAgent):
             if route and new_mem_content:
                 # Branch A: Update an existing memory
                 if route.startswith("ADD_TO_"):
-                    mem_id = route.replace("ADD_TO_", "").strip()
+                    mem_id = route.replace("ADD_TO_", "").strip().lower()
                     if self.store.get_memory(opponent_key, mem_id):
                         vec = self.embedder.encode(new_mem_content, is_query=False) # Embed the updated content
                         self.store.update_memory(

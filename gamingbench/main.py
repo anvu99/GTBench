@@ -223,6 +223,7 @@ def run_game(game_name):
               for config_path in args.model_configs]
 
     for i, (a, m) in enumerate(zip(agents, models)):
+        m.nick_name = f"Player {i+1}"
         a.set_model(m)
         a.player_id = f"p{i}"
         a.enable_chat = getattr(args, 'enable_chat', False)
@@ -239,8 +240,8 @@ def run_game(game_name):
                 key_a0 = a0.agent_name
                 key_a1 = a1.agent_name
             else:
-                key_a0 = f"{a0.player_id}:{a0.agent_name}_{models[0].nick_name}"
-                key_a1 = f"{a1.player_id}:{a1.agent_name}_{models[1].nick_name}"
+                key_a0 = f"{a0.agent_name}_{models[0].nick_name}"
+                key_a1 = f"{a1.agent_name}_{models[1].nick_name}"
             a0.set_partner_store(a1.ltm_store_path, key_a0)
             a1.set_partner_store(a0.ltm_store_path, key_a1)
 
@@ -294,7 +295,14 @@ def run_game(game_name):
                     else:
                         fresh_agents.append(copy.deepcopy(a))
 
-                for fa, m in zip(fresh_agents, models):
+                if getattr(args, 'exchange_first_player', False) and match_idx % 2 == 1:
+                    match_agents = [fresh_agents[1], fresh_agents[0]]
+                    match_models = [models[1], models[0]]
+                else:
+                    match_agents = fresh_agents
+                    match_models = list(models)
+
+                for fa, m in zip(match_agents, match_models):
                     fa.set_model(m)
                     fa.enable_chat = getattr(args, 'enable_chat', False)
                     fa.think_further = getattr(args, 'think_further', False)
@@ -302,8 +310,8 @@ def run_game(game_name):
                 batch_args.append({
                     'match_idx': match_idx,
                     'game_name': game_name,
-                    'agents': fresh_agents,
-                    'models': models,
+                    'agents': match_agents,
+                    'models': match_models,
                     'result_path': result_path,
                     'args': args,
                     'lock': lock,
@@ -358,11 +366,18 @@ def run_game(game_name):
     elif args.num_workers == 1:
         results = []
         for match_idx in range(args.num_matches):
+            if getattr(args, 'exchange_first_player', False) and match_idx % 2 == 1:
+                match_agents = [copy.deepcopy(agents[1]), copy.deepcopy(agents[0])]
+                match_models = [models[1], models[0]]
+            else:
+                match_agents = [copy.deepcopy(a) for a in agents]
+                match_models = list(models)
+                
             match_arg = {
                 'match_idx': match_idx,
                 'game_name': game_name,
-                'agents': [copy.deepcopy(a) for a in agents],
-                'models': models,
+                'agents': match_agents,
+                'models': match_models,
                 'result_path': result_path,
                 'args': args,
                 'lock': lock
@@ -371,11 +386,18 @@ def run_game(game_name):
     else:
         match_arg_list = []
         for match_idx in range(args.num_matches):
+            if getattr(args, 'exchange_first_player', False) and match_idx % 2 == 1:
+                match_agents = [copy.deepcopy(agents[1]), copy.deepcopy(agents[0])]
+                match_models = [models[1], models[0]]
+            else:
+                match_agents = [copy.deepcopy(a) for a in agents]
+                match_models = list(models)
+
             match_arg_list.append({
                 'match_idx': match_idx,
                 'game_name': game_name,
-                'models': models,
-                'agents': [copy.deepcopy(a) for a in agents],
+                'models': match_models,
+                'agents': match_agents,
                 'result_path': result_path,
                 'args': args,
                 'lock': lock
@@ -438,7 +460,7 @@ def run_match(params):
     game_log_handler = utils.add_game_log_handler(per_game_log)
 
     try:
-        first_player = 1 if (args.exchange_first_player and match_idx % 2 == 1) else 0
+        first_player = 0
         game_env.play(first_player=first_player)
         res = game_env.history_tracker.to_dict()
     finally:
@@ -524,8 +546,7 @@ def run_match_nplayer(params):
                     if hasattr(agent, 'agent_name') and hasattr(other_agent, 'agent_name') and agent.agent_name == other_agent.agent_name:
                         opponent_keys.append(other_agent.agent_name)
                     else:
-                        player_id = getattr(other_agent, 'player_id', f"p{j}")
-                        opponent_keys.append(f"{player_id}:{other_agent.agent_name}_{models[j].nick_name}")
+                        opponent_keys.append(f"{other_agent.agent_name}_{models[j].nick_name}")
             
             memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
             if memory_mode == 'combined':
@@ -599,6 +620,7 @@ def run_game_nplayer(game_name):
     models = [utils.load_model(config_path) for config_path in model_configs]
 
     for i, (a, m) in enumerate(zip(agents, models)):
+        m.nick_name = f"Player {i+1}"
         a.set_model(m)
         a.player_id = f"p{i}"
         a.enable_chat = getattr(args, 'enable_chat', False)
@@ -615,8 +637,8 @@ def run_game_nplayer(game_name):
                 key_a0 = a0.agent_name
                 key_a1 = a1.agent_name
             else:
-                key_a0 = f"{a0.player_id}:{a0.agent_name}_{models[0].nick_name}"
-                key_a1 = f"{a1.player_id}:{a1.agent_name}_{models[1].nick_name}"
+                key_a0 = f"{a0.agent_name}_{models[0].nick_name}"
+                key_a1 = f"{a1.agent_name}_{models[1].nick_name}"
             a0.set_partner_store(a1.ltm_store_path, key_a0)
             a1.set_partner_store(a0.ltm_store_path, key_a1)
 
