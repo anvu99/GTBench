@@ -77,7 +77,12 @@ class OpenSpielGame:
                 num_actions = len(outcomes)
                 print("Chance node, got " + str(num_actions) + " outcomes")
                 action_list, prob_list = zip(*outcomes)
-                action = self._sample_chance_action(action_list, prob_list)
+                
+                if hasattr(self, 'forced_chance_actions') and len(self.forced_chance_actions) > 0:
+                    action = self.forced_chance_actions.pop(0)
+                else:
+                    action = self._sample_chance_action(action_list, prob_list)
+                    
                 print("Sampled outcome: ",
                       self.env.action_to_string(self.env.current_player(), action))
                 self.env.apply_action(action)
@@ -330,8 +335,6 @@ class OpenSpielGame:
                                  "White ('w'), advancing upward from Row 1 toward Row 8")
                     opp_color = "White ('w')" if agent_idx == 0 else "Black ('b')"
                     agent_history += (
-                        f"[Player Context] You play as {you_color}. "
-                        f"The opponent plays as {opp_color}.\n"
                         f"[Position Legend] Each [Position] line shows the board before that player's move. "
                         f"Format: a list of row strings from Row 8 (top) to Row 1 (bottom), "
                         f"columns a-c left to right. "
@@ -341,8 +344,6 @@ class OpenSpielGame:
                     you_symbol = "X (Crosses)" if agent_idx == 0 else "O (Noughts)"
                     opp_symbol = "O (Noughts)" if agent_idx == 0 else "X (Crosses)"
                     agent_history += (
-                        f"[Player Context] You play as {you_symbol}. "
-                        f"The opponent plays as {opp_symbol}.\n"
                         f"[Position Legend] Each [Position] line shows the board before that player's move. "
                         f"Format: a list of row strings from Row 1 (top) to Row 3 (bottom), "
                         f"columns C1-C3 left to right. "
@@ -352,8 +353,6 @@ class OpenSpielGame:
                     you_symbol = "X (Red)" if agent_idx == 0 else "O (Yellow)"
                     opp_symbol = "O (Yellow)" if agent_idx == 0 else "X (Red)"
                     agent_history += (
-                        f"[Player Context] You play as {you_symbol}. "
-                        f"The opponent plays as {opp_symbol}.\n"
                         f"[Position Legend] Each [Position] line shows the board before that player's move. "
                         f"Format: a list of row strings from Row 6 (top) to Row 1 (bottom), "
                         f"columns C1-C7 left to right. "
@@ -361,60 +360,48 @@ class OpenSpielGame:
                     )
                 elif self.game_name == 'python_iterated_prisoners_dilemma':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the round history of decisions so far. "
                         f"Format: Round X: You=[Silent/Testify], Opponent=[Silent/Testify].\n\n"
                     )
                 elif self.game_name == 'kuhn_poker':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your private card and the betting history. "
                         f"Format: Your card: [Card]. Betting history: [Moves].\n\n"
                     )
                 elif self.game_name == 'liars_dice':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the face value of your private die. "
-                        f"Format: Your die: [1-6].\n\n"
+                        f"Format: Your die: [1-6].\n"
+                        f"[Chat] lines show messages sent by the players.\n"
+                        f"[Move] lines show the action taken by the player.\n\n"
                     )
                 elif self.game_name == 'nim':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the match counts for the 4 piles. "
                         f"Format: Pile 1: x, Pile 2: y, Pile 3: z, Pile 4: w.\n\n"
                     )
                 elif self.game_name == 'pig':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your banked score, opponent banked score, and turn total. "
                         f"Format: Your score: x, Opponent score: y, Turn total: z.\n\n"
                     )
                 elif self.game_name == 'negotiation':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the remaining item pool, your private valuations, turn stage, and recent proposal/utterance. "
                         f"Format: Pool: [Peppers, Strawberries, Cherries], Your values: [v1, v2, v3], Stage: [Proposal/Utterance], Your/Opponent Proposal: [p1, p2, p3], Your/Opponent Utterance: [u1, u2, u3].\n\n"
                     )
                 elif self.game_name == 'first_sealed_auction':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your private valuation. "
                         f"Format: Your private valuation: x.\n"
+                        f"[Chat] lines show messages sent by the players.\n"
+                        f"[Move] lines show the action taken by the player.\n"
                         f"Note: This is a simultaneous bidding game. Both players submitted their bids at the exact same time without knowing each other's bids.\n\n"
                     )
                 else:
                     you_num = 1 if agent_idx == 0 else 2
                     opp_num = 2 if agent_idx == 0 else 1
                     agent_history += (
-                        f"[Player Context] You play as Player {you_num}. "
-                        f"The opponent plays as Player {opp_num}.\n"
                         f"[Position Legend] Each [Position] line shows the game state before that player's move.\n\n"
                     )
 
@@ -478,8 +465,6 @@ class OpenSpielGame:
                                  "White ('w'), advancing upward from Row 1 toward Row 8")
                     opp_color = "White ('w')" if agent_idx == 0 else "Black ('b')"
                     agent_history += (
-                        f"[Player Context] You play as {you_color}. "
-                        f"The opponent plays as {opp_color}.\n"
                         f"[Position Legend] Each [Position] line shows the board before that player's move. "
                         f"Format: a list of row strings from Row 8 (top) to Row 1 (bottom), "
                         f"columns a-c left to right. "
@@ -489,8 +474,6 @@ class OpenSpielGame:
                     you_symbol = "X (Crosses)" if agent_idx == 0 else "O (Noughts)"
                     opp_symbol = "O (Noughts)" if agent_idx == 0 else "X (Crosses)"
                     agent_history += (
-                        f"[Player Context] You play as {you_symbol}. "
-                        f"The opponent plays as {opp_symbol}.\n"
                         f"[Position Legend] Each [Position] line shows the board before that player's move. "
                         f"Format: a list of row strings from Row 1 (top) to Row 3 (bottom), "
                         f"columns C1-C3 left to right. "
@@ -500,8 +483,6 @@ class OpenSpielGame:
                     you_symbol = "X (Red)" if agent_idx == 0 else "O (Yellow)"
                     opp_symbol = "O (Yellow)" if agent_idx == 0 else "X (Red)"
                     agent_history += (
-                        f"[Player Context] You play as {you_symbol}. "
-                        f"The opponent plays as {opp_symbol}.\n"
                         f"[Position Legend] Each [Position] line shows the board before that player's move. "
                         f"Format: a list of row strings from Row 6 (top) to Row 1 (bottom), "
                         f"columns C1-C7 left to right. "
@@ -509,60 +490,48 @@ class OpenSpielGame:
                     )
                 elif self.game_name == 'python_iterated_prisoners_dilemma':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the round history of decisions so far. "
                         f"Format: Round X: You=[Silent/Testify], Opponent=[Silent/Testify].\n\n"
                     )
                 elif self.game_name == 'kuhn_poker':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your private card and the betting history. "
                         f"Format: Your card: [Card]. Betting history: [Moves].\n\n"
                     )
                 elif self.game_name == 'liars_dice':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the face value of your private die. "
-                        f"Format: Your die: [1-6].\n\n"
+                        f"Format: Your die: [1-6].\n"
+                        f"[Chat] lines show messages sent by the players.\n"
+                        f"[Move] lines show the action taken by the player.\n\n"
                     )
                 elif self.game_name == 'nim':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the match counts for the 4 piles. "
                         f"Format: Pile 1: x, Pile 2: y, Pile 3: z, Pile 4: w.\n\n"
                     )
                 elif self.game_name == 'pig':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your banked score, opponent banked score, and turn total. "
                         f"Format: Your score: x, Opponent score: y, Turn total: z.\n\n"
                     )
                 elif self.game_name == 'negotiation':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows the remaining item pool, your private valuations, turn stage, and recent proposal/utterance. "
                         f"Format: Pool: [Peppers, Strawberries, Cherries], Your values: [v1, v2, v3], Stage: [Proposal/Utterance], Your/Opponent Proposal: [p1, p2, p3], Your/Opponent Utterance: [u1, u2, u3].\n\n"
                     )
                 elif self.game_name == 'first_sealed_auction':
                     agent_history += (
-                        f"[Player Context] You play as Player {agent_idx + 1}. "
-                        f"The opponent plays as Player {(1 - agent_idx) + 1}.\n"
                         f"[Position Legend] Each [Position] line shows your private valuation. "
                         f"Format: Your private valuation: x.\n"
+                        f"[Chat] lines show messages sent by the players.\n"
+                        f"[Move] lines show the action taken by the player.\n"
                         f"Note: This is a simultaneous bidding game. Both players submitted their bids at the exact same time without knowing each other's bids.\n\n"
                     )
                 else:
                     you_num = 1 if agent_idx == 0 else 2
                     opp_num = 2 if agent_idx == 0 else 1
                     agent_history += (
-                        f"[Player Context] You play as Player {you_num}. "
-                        f"The opponent plays as Player {opp_num}.\n"
                         f"[Position Legend] Each [Position] line shows the game state before that player's move.\n\n"
                     )
                 

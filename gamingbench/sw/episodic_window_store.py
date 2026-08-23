@@ -36,8 +36,12 @@ class EpisodicWindowStore:
         """Serializes the EW store to a JSON file."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
         serializable_obs = {k: list(v) for k, v in self.observations.items()}
-        with open(filepath, "w") as f:
+        tmp_filepath = filepath + ".tmp"
+        with open(tmp_filepath, "w") as f:
             json.dump({"observations": serializable_obs, "notes": self.notes}, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp_filepath, filepath)
 
     def load(self, filepath: str) -> None:
         """Deserializes the EW store from a JSON file."""

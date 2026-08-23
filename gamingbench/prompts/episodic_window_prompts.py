@@ -1,13 +1,12 @@
 EW_INJECTION_PROMPT = """\
-=== YOUR GAME NOTES ===
-From your experience in previous games of {game_name}, you have written these notes to guide your future play.
+=== OPPONENT REPUTATION NOTE ===
+From your experience in previous games of {game_name}, you have built up this note about your opponent. It captures insights about their behavioral tendencies, patterns, and hidden intent to help you anticipate their moves and make better decisions.
 
---- GAME NOTES ---
+--- OPPONENT REPUTATION NOTE ---
 {notes_text}
 
-Use these notes to inform your current move decisions.
-=== END GAME NOTES ===
-"""
+Use this note to inform your current move decisions.
+=== END OPPONENT REPUTATION NOTE ==="""
 
 EW_ENDGAME_OBS_PROMPT = """\
 You are reviewing your experience in {game_name}.
@@ -27,8 +26,9 @@ You are reviewing your experience in {game_name}.
 --- GAME RULES ---
 {game_intro}
 
---- YOUR RECENT GAME OBSERVATIONS (last {n} games) ---
+--- RECENT GAME TRAJECTORIES (last {n} games) ---
 {observations}
 
-Based on these {n} observations, write general notes to guide your strategy in future games of {game_name}. These notes will be provided to you at the start of each future game.
+Based on these {n} game trajectories, write an updated Opponent Reputation Note.
+This note should store insights you have perceived about the opponent — their behavioral tendencies, patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
 """

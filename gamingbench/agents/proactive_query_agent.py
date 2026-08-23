@@ -2,20 +2,26 @@ import os
 import re
 import json
 import threading
+import concurrent.futures
 import copy
+import time
 from typing import List, Dict, Any
 
 from gamingbench.agents.prompt_agent import PromptAgent
 from gamingbench.ltm.two_layer_store import TwoLayerStore
+from gamingbench.ltm.stat_pool import StatPool
 from gamingbench.ltm.strategy_store import StrategyStore
 from gamingbench.ltm.two_layer_prompts import (
     PQA_QUESTION_GEN_PROMPT,
-    PQA_MEMORY_MODIFY_PROMPT,
-    PQA_UNANSWERED_SYNTHESIS_PROMPT,
-    POST_GAME_QUESTION_REVIEW_PROMPT,
-    ROUTE_AND_MODIFY_PROMPT,
+    STAT_PROPOSAL_PROMPT,
+    STAT_UPDATE_PROMPT,
+    MEMORY_CONTENT_UPDATE_PROMPT,
+    STAT_DEFINITION_PROMPT,
+    NEW_MEMORY_FINALIZATION_PROMPT,
+        ROUTE_AND_MODIFY_PROMPT,
     PROACTIVE_INJECTION_BLOCK,
     IN_GAME_ASSESSMENT_SUFFIX,
+    IN_GAME_ASSESSMENT_SUFFIX_NO_STRATEGY,
     STRATEGY_INJECTION_BLOCK,
     STRATEGY_SCORING_PROMPT,
     STRATEGY_MERGE_PROMPT
@@ -38,7 +44,8 @@ def extract_json_block(text: str) -> dict:
         else:
             json_str = "{}"
     try:
-        return json.loads(json_str)
+        parsed = json.loads(json_str)
+        return parsed if isinstance(parsed, dict) else {}
     except json.JSONDecodeError:
         return {}
 
@@ -92,16 +99,22 @@ class ProactiveQueryAgent(PromptAgent):
         self.post_game_top_k = getattr(config, "post_game_top_k", 6)
         self.max_evidence_per_memory = getattr(config, "max_evidence_per_memory", 6)
         self.max_questions_per_step = getattr(config, "max_questions_per_step", 3)
+        self.max_stats_per_memory = getattr(config, "max_stats_per_memory", 10)
         
         self.store_path = getattr(config, "two_layer_store_path", "two_layer_store.json")
         self.store = TwoLayerStore()
-        
         if os.path.exists(self.store_path):
             self.store.load(self.store_path)
             
+        self.stat_pool_path = getattr(config, "stat_pool_path", "stat_pool.json")
+        self.stat_pool = StatPool()
+        if os.path.exists(self.stat_pool_path):
+            self.stat_pool.load(self.stat_pool_path)
+            
+        self.use_strategy_memory = getattr(config, "use_strategy_memory", True)
         self.strategy_store_path = getattr(config, "strategy_store_path", "strategy_store.json")
         self.strategy_store = StrategyStore()
-        if os.path.exists(self.strategy_store_path):
+        if self.use_strategy_memory and os.path.exists(self.strategy_store_path):
             self.strategy_store.load(self.strategy_store_path)
             
         self.current_opponent_key = None
@@ -115,6 +128,36 @@ class ProactiveQueryAgent(PromptAgent):
         # Tracks the questions asked and whether they were answered during the game
         self.question_log = []
 
+    # Class-level lock for thread-safe file logging
+    _log_lock = threading.Lock()
+
+    def _log_prompt(self, phase_title, prompt, raw_answer):
+        """Helper to log the prompts for debugging to both standard logger and a dedicated file."""
+        log_str = (
+            f"=== {phase_title} ===\n"
+            f"PROMPT:\n{prompt}\n"
+            f"RAW ANSWER:\n{raw_answer}\n"
+            f"{'=' * (8 + len(phase_title))}\n\n"
+        )
+        if hasattr(self, 'logger'):
+            self.logger.info(f"=== {phase_title} ===")
+            self.logger.info(f"PROMPT:\n{prompt}")
+            self.logger.info(f"RAW ANSWER:\n{raw_answer}")
+            self.logger.info("=" * (8 + len(phase_title)))
+        
+        with self._log_lock:
+            try:
+                log_dir = os.path.dirname(self.store_path) if hasattr(self, 'store_path') else ""
+                log_file = "ProactiveQueryAgent_question_processing.log"
+                if log_dir and log_dir != '/dev/null':
+                    log_file = os.path.join(log_dir, f"{self.agent_name}_question_processing.log")
+                    
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(log_str)
+            except Exception as e:
+                if hasattr(self, 'logger'):
+                    self.logger.error(f"Failed to write to question processing log: {e}")
+
     def set_storage_dir(self, storage_dir):
         """Updates the store path when the framework overrides the storage directory."""
         base = os.path.basename(self.store_path)
@@ -126,6 +169,15 @@ class ProactiveQueryAgent(PromptAgent):
         self.store_path = os.path.join(storage_dir, base)
         if os.path.exists(self.store_path):
             self.store.load(self.store_path)
+            
+        stat_base = os.path.basename(self.stat_pool_path)
+        if getattr(self, 'memory_mode', 'combined') == 'separate' or getattr(self, 'hive_mode', False):
+            pid = getattr(self, 'player_id', 'pX')
+            if f"_{pid}.json" not in stat_base:
+                stat_base = stat_base.replace(".json", f"_{pid}.json")
+        self.stat_pool_path = os.path.join(storage_dir, stat_base)
+        if os.path.exists(self.stat_pool_path):
+            self.stat_pool.load(self.stat_pool_path)
 
         strat_base = os.path.basename(self.strategy_store_path)
         self.strategy_store_path = os.path.join(storage_dir, strat_base)
@@ -136,7 +188,7 @@ class ProactiveQueryAgent(PromptAgent):
         if not self.batch_mode:
             if os.path.exists(self.store_path): 
                 self.store.load(self.store_path)
-            if os.path.exists(self.strategy_store_path):
+            if self.use_strategy_memory and os.path.exists(self.strategy_store_path):
                 self.strategy_store.load(self.strategy_store_path)
             
         self.game_count = getattr(self, 'game_count', 0) + 1
@@ -172,12 +224,19 @@ class ProactiveQueryAgent(PromptAgent):
             result.embedder = embedder
         return result
 
-    def _get_strategy_injection_block(self):
-        top_strats = self.strategy_store.get_top_k_by_score(6)
+    def _get_strategy_injection_block(self, env_name=None):
+        top_strats = self.strategy_store.get_mixed_top_k(top_score_k=6, top_recent_k=4)
         if top_strats:
             strat_lines = []
             for s in top_strats:
-                strat_lines.append(f"[{s['id']}] \"{s['title']}\" (✓{s.get('success_count', 0)} / ~{s.get('neutral_count', 0)} / ✗{s.get('failure_count', 0)})\nDefinition: {s['definition']}\n")
+                # strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Success: {s.get('success_count', 0)} | Failure: {s.get('failure_count', 0)} | Avg Utility: {s.get('average_utility', 0.0):.2f})\nDefinition: {s['definition']}\nExpected Successful Outcome: {s.get('success_criteria', 'None')}\nAnticipated Failure Outcome: {s.get('failure_criteria', 'None')}\n")
+                avg_util = s.get('average_utility', 0.0)
+                games = s.get('uses_count', 0)
+                if env_name == "liars_dice":
+                    win_rate = (avg_util + 1) / 2
+                    strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Win Rate: {win_rate:.0%} | Games: {games})\nDefinition: {s['definition']}\n")
+                else:
+                    strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Avg Utility: {avg_util:.2f} | Games: {games})\nDefinition: {s['definition']}\n")
             return STRATEGY_INJECTION_BLOCK.format(top_strategies="\n".join(strat_lines))
         else:
             return STRATEGY_INJECTION_BLOCK.format(top_strategies="No strategies available yet. You must create a new one.")
@@ -188,10 +247,10 @@ class ProactiveQueryAgent(PromptAgent):
         """
         sys_prompt, obs_prompt = PromptAgent._build_prompts(self, observations)
         
-        # Fetch top 10 memories by score for the prompt injection
+        # Fetch a mix of top-performing and recent memories for the prompt injection
         top_questions_text = "No prior top-performing questions available."
         if self.current_opponent_key:
-            top_mems = self.store.get_top_k_by_score(self.current_opponent_key, top_k=10)
+            top_mems = self.store.get_mixed_top_k(self.current_opponent_key, top_score_k=6, top_recent_k=4)
             if top_mems:
                 top_q_list = []
                 for m in top_mems:
@@ -199,72 +258,78 @@ class ProactiveQueryAgent(PromptAgent):
                     top_q_list.append(f"[{m['id']}] \"{m['question']}\"")
                 top_questions_text = "\n".join(top_q_list)
                 
-        strat_injection = self._get_strategy_injection_block()
-                
         messages = [
             {'role': 'system', 'content': sys_prompt},
-            {'role': 'user', 'content': f"{strat_injection}\n--- CURRENT GAME STATE ---\n{obs_prompt}\n\n{PQA_QUESTION_GEN_PROMPT.format(top_questions=top_questions_text, working_memory=self.match_working_memory, max_questions=self.max_questions_per_step)}"}
+            {'role': 'user', 'content': f"--- CURRENT GAME STATE ---\n{obs_prompt}\n\n{PQA_QUESTION_GEN_PROMPT.format(top_questions=top_questions_text, working_memory=self.match_working_memory, max_questions=self.max_questions_per_step)}"}
         ]
         
-        responses, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-        raw_resp = responses[0]
-        stripped_resp = strip_thinking_block(raw_resp)
-        
-        self.logger.info("=== IN-GAME QUESTION GENERATION ===")
-        self.logger.info(f"PROMPT:\n{messages[1]['content']}")
-        self.logger.info(f"RAW ANSWER:\n{raw_resp}")
-        self.logger.info(f"STRIPPED ANSWER:\n{stripped_resp}")
-        self.logger.info("===================================")
-        
-        # Extract the JSON block from the LLM's response
-        parsed_json = extract_json_block(stripped_resp)
-        # Parse the summary text
-        summary = parsed_json.get("summary", "")
-        # Parse the questions array (defaults to an empty list if not found)
-        questions_raw = parsed_json.get("questions", [])
-        
+        max_retries = 3
+        summary = ""
         questions = []
-        # Ensure the parsed questions field is actually a list
-        if isinstance(questions_raw, list):
-            # Iterate through each generated question object
-            for q in questions_raw:
-                # Ensure the question object is a dictionary
-                if isinstance(q, dict):
-                    # Extract the question text
-                    q_text = q.get("question", "")
-                    # Extract the source memory ID, if provided
-                    src_id = q.get("source_memory_id")
-                    # If it's a blank string, convert it to None for consistency
-                    if isinstance(src_id, str) and not src_id.strip():
+        final_query = None
+        
+        for attempt in range(max_retries):
+            responses, query = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+            raw_resp = responses[0]
+            stripped_resp = strip_thinking_block(raw_resp)
+            
+            if attempt == 0:
+                self.logger.info("=== IN-GAME QUESTION GENERATION ===")
+                self.logger.info(f"PROMPT:\n{messages[1]['content']}")
+            self.logger.info(f"RAW ANSWER (Attempt {attempt+1}):\n{raw_resp}")
+            self.logger.info(f"STRIPPED ANSWER (Attempt {attempt+1}):\n{stripped_resp}")
+            self.logger.info("===================================")
+            
+            parsed_json = extract_json_block(stripped_resp)
+            error_parts = []
+            
+            if not parsed_json:
+                error_parts.append("Failed to parse JSON. Please ensure your output is strictly valid JSON without unescaped LaTeX slashes (e.g., use \\\\ge instead of \\ge) and is not cut off.")
+            else:
+                summary = parsed_json.get("summary", "")
+                questions_raw = parsed_json.get("questions", [])
+                
+                questions = []
+                if isinstance(questions_raw, list):
+                    for q in questions_raw:
+                        if isinstance(q, dict):
+                            q_text = q.get("question", "")
+                            src_id = q.get("source_memory_id")
+                            if isinstance(src_id, str) and (not src_id.strip() or src_id.strip().lower() == "null"):
+                                src_id = None
+                            if q_text:
+                                if src_id:
+                                    original_mem = self.store.get_memory(self.current_opponent_key, src_id)
+                                    if original_mem and 'question' in original_mem:
+                                        q_text = original_mem['question']
+                                    else:
+                                        continue
+                                questions.append({"question": q_text, "source_memory_id": src_id})
+                
+                if not questions:
+                    q_text = parsed_json.get("question", "")
+                    src_id = parsed_json.get("source_memory_id")
+                    if isinstance(src_id, str) and (not src_id.strip() or src_id.strip().lower() == "null"):
                         src_id = None
-                    # Only append valid non-empty questions
                     if q_text:
-                        # SAFE FALLBACK: If source_memory_id is provided, perfectly copy the original question text
                         if src_id:
                             original_mem = self.store.get_memory(self.current_opponent_key, src_id)
                             if original_mem and 'question' in original_mem:
                                 q_text = original_mem['question']
-                                
-                        questions.append({"question": q_text, "source_memory_id": src_id})
+                            else:
+                                error_parts.append(f"source_memory_id '{src_id}' not found.")
+                        if not error_parts:
+                            questions.append({"question": q_text, "source_memory_id": src_id})
+                            
+            if not error_parts:
+                final_query = query
+                break
+                
+            if attempt < max_retries - 1:
+                messages.append({"role": "assistant", "content": raw_resp})
+                messages.append({"role": "user", "content": " ".join(error_parts) + " Please fix and try again."})
         
-        # Fallback in case the LLM fails to format as an array and returns the old single-question format
-        if not questions:
-            # Extract the single question text
-            q_text = parsed_json.get("question", raw_resp.strip())
-            # Extract the single source memory ID
-            src_id = parsed_json.get("source_memory_id")
-            # Convert blank string to None
-            if isinstance(src_id, str) and not src_id.strip():
-                src_id = None
-            # Append as a 1-element list
-            if q_text:
-                if src_id:
-                    original_mem = self.store.get_memory(self.current_opponent_key, src_id)
-                    if original_mem and 'question' in original_mem:
-                        q_text = original_mem['question']
-                questions.append({"question": q_text, "source_memory_id": src_id})
-        
-        return summary, questions, query
+        return summary, questions, final_query
         
     def _run_in_game_memory_retrieval(self, summary_text, question_text, source_memory_id=None):
         """Helper to process the retrieval using both summary and question."""
@@ -280,8 +345,7 @@ class ProactiveQueryAgent(PromptAgent):
                     
             if not retrieved_mems:
                 # Fall back to semantic search if no source ID or direct lookup failed
-                combined_query = f"Summary: {summary_text}\nQuestion: {question_text}"
-                query_vec = self.embedder.encode(combined_query, is_query=True)
+                query_vec = self.embedder.encode(question_text, is_query=True)
                 retrieved_mems = self.store.find_relevant_memories(self.current_opponent_key, query_vec, top_k=self.in_game_top_k)
             
             if retrieved_mems:
@@ -315,10 +379,25 @@ class ProactiveQueryAgent(PromptAgent):
         return PROACTIVE_INJECTION_BLOCK.format(question_blocks=question_blocks_str)
 
     def step(self, observations):
-        """Main action loop for the proactive agent on its turn."""
+        """
+        Main action loop for the proactive agent on its turn.
+        
+        The execution flow is:
+        1. Proactive Query Generation: The agent looks at the current game state and generates
+           a list of strategic questions it wants to ask its memory database (e.g., "Has the opponent bluffed in this situation before?").
+        2. Memory Retrieval: For each question, it performs a semantic search against the TwoLayerStore
+           to retrieve relevant long-term memories.
+        3. Prompt Injection: It concatenates the retrieved memories and any overarching strategies
+           into the observation prompt.
+        4. Action Generation: It queries the LLM with this enriched prompt to choose the best legal move,
+           and additionally assesses whether the retrieved memories were actually helpful.
+        5. Trajectory Logging: It logs the state, questions, and memory assessments into `self.current_trajectory`
+           which is later used by the batched post-game pipeline (`flush_batch_updates`).
+        """
         self.move_count += 1
         query_list = []
         
+        # 1. Proactive Query Generation
         summary_text, questions, sum_query = self._generate_summary_and_question(observations)
         if sum_query:
             query_list.append(sum_query)
@@ -327,8 +406,17 @@ class ProactiveQueryAgent(PromptAgent):
         env_name = observations['env_name']
         board_state = construct_observation_prompt(observations, env_name)
         
-        # Build prompt injections for all questions by iteratively retrieving memories
+        # 2. Build prompt injections for all questions by iteratively retrieving memories
         all_retrieved_mems_list = []
+        if not questions:
+            self.current_trajectory.append({
+                "round": observations.get('game_round', self.move_count),
+                "phase": "Action",
+                "state": board_state,
+                "summary": summary_text,
+                "question": ""
+            })
+            
         for q_dict in questions:
             q_text = q_dict["question"]
             src_id = q_dict["source_memory_id"]
@@ -346,24 +434,30 @@ class ProactiveQueryAgent(PromptAgent):
             retrieved_mems, _ = self._run_in_game_memory_retrieval(
                 summary_text, q_text, source_memory_id=src_id
             )
-            # Store the retrieved memories to assess them later
+            # Store the retrieved memories to inject into the LLM prompt and to assess them later
             all_retrieved_mems_list.append((q_dict, retrieved_mems))
             
         system_prompt, observation_prompt = PromptAgent._build_prompts(self, observations)
         
-        strat_injection = self._get_strategy_injection_block()
+        # 3. Prompt Injection: Insert strategies and retrieved memories directly above the board state
+        wm_injection = f"=== WORKING MEMORY ===\n{self.match_working_memory}\n=====================\n"
+        if self.use_strategy_memory:
+            strat_injection = self._get_strategy_injection_block(env_name)
+            full_injection = wm_injection + "\n" + strat_injection
+        else:
+            full_injection = wm_injection
         if all_retrieved_mems_list:
             combined_injection = self._build_injection_block(all_retrieved_mems_list)
-            observation_prompt = observation_prompt.replace(board_state, strat_injection + "\n\n" + combined_injection + "\n\n" + board_state, 1)
+            observation_prompt = observation_prompt.replace(board_state, full_injection + "\n\n" + combined_injection + "\n\n" + board_state, 1)
         else:
-            observation_prompt = observation_prompt.replace(board_state, strat_injection + "\n\n" + board_state, 1)
+            observation_prompt = observation_prompt.replace(board_state, full_injection + "\n\n" + board_state, 1)
 
         step_instruct = self.step_prompt_constructor(observations)
         step_prompt = step_instruct['prompt']
         if getattr(self, "think_further", False):
             step_prompt += "\n\nBefore generating your action, carefully think multiple steps ahead."
             
-        step_prompt += IN_GAME_ASSESSMENT_SUFFIX
+        step_prompt += IN_GAME_ASSESSMENT_SUFFIX if self.use_strategy_memory else IN_GAME_ASSESSMENT_SUFFIX_NO_STRATEGY
             
         observation_prompt = observation_prompt + '\n' + step_prompt
         regex = step_instruct['regex']
@@ -410,26 +504,27 @@ class ProactiveQueryAgent(PromptAgent):
             try:
                 parsed_json = extract_json_block(stripped_response)
                 
-                # Parse strategy
-                strategy_raw = parsed_json.get("strategy", {})
-                strat_type = strategy_raw.get("type")
-                if strat_type == "follow":
-                    strat_id = strategy_raw.get("strategy_id", "")
-                    if isinstance(strat_id, str):
-                        strat_id = strat_id.strip()
-                    if not strat_id or not self.strategy_store.get_strategy(strat_id):
-                        error_parts.append(f"strategy_id '{strat_id}' not found in strategy store. Use an existing ID or set type to 'new'.")
+                # Parse strategy (only when strategy memory is enabled)
+                if self.use_strategy_memory:
+                    strategy_raw = parsed_json.get("strategy", {})
+                    strat_type = strategy_raw.get("type")
+                    if strat_type == "follow":
+                        strat_id = strategy_raw.get("strategy_id", "")
+                        if isinstance(strat_id, str):
+                            strat_id = strat_id.strip()
+                        if not strat_id or not self.strategy_store.get_strategy(strat_id):
+                            error_parts.append(f"strategy_id '{strat_id}' not found in strategy store. Use an existing ID or set type to 'new'.")
+                        else:
+                            parsed_strategy = strategy_raw
+                    elif strat_type == "new":
+                        required = ["title", "definition", "success_criteria", "failure_criteria"]
+                        missing = [f for f in required if not strategy_raw.get(f, "").strip()]
+                        if missing:
+                            error_parts.append(f"New strategy is missing required fields: {missing}.")
+                        else:
+                            parsed_strategy = strategy_raw
                     else:
-                        parsed_strategy = strategy_raw
-                elif strat_type == "new":
-                    required = ["title", "definition", "success_criteria", "neutral_criteria", "failure_criteria"]
-                    missing = [f for f in required if not strategy_raw.get(f, "").strip()]
-                    if missing:
-                        error_parts.append(f"New strategy is missing required fields: {missing}.")
-                    else:
-                        parsed_strategy = strategy_raw
-                else:
-                    error_parts.append("strategy.type must be 'follow' or 'new'.")
+                        error_parts.append("strategy.type must be 'follow' or 'new'.")
                     
                 assessments = parsed_json.get("assessments", [])
                 expected_len = len(all_retrieved_mems_list)
@@ -444,12 +539,16 @@ class ProactiveQueryAgent(PromptAgent):
                         else:
                             target_idx = idx
                             
+                        src_id = all_retrieved_mems_list[target_idx][0].get("source_memory_id")
                         q_type = item.get("question_type", "new")
                         
-                        if q_type == "direct":
+                        if q_type == "direct" and not src_id:
+                            q_type = "new"
+                            
+                        if q_type == "direct" or bool(src_id):
                             ans = True
                             mem_concl = ""
-                            d_id = all_retrieved_mems_list[target_idx][0].get("source_memory_id")
+                            d_id = src_id
                         else:
                             ans = item.get("answered", False)
                             if isinstance(ans, str):
@@ -477,12 +576,13 @@ class ProactiveQueryAgent(PromptAgent):
                 error_parts.append(f"Failed to parse JSON assessment response: {str(e)}.")
                 
             if not error_parts:
-                self.strategy_log.append({
-                    "turn": self.move_count,
-                    "type": parsed_strategy["type"],
-                    "strategy_id": parsed_strategy.get("strategy_id"),
-                    "strategy_dict": parsed_strategy if parsed_strategy["type"] == "new" else None
-                })
+                if self.use_strategy_memory and parsed_strategy:
+                    self.strategy_log.append({
+                        "turn": self.move_count,
+                        "type": parsed_strategy["type"],
+                        "strategy_id": parsed_strategy.get("strategy_id"),
+                        "strategy_dict": parsed_strategy if parsed_strategy["type"] == "new" else None
+                    })
                 break
                 
             if attempt < max_retries - 1:
@@ -494,7 +594,7 @@ class ProactiveQueryAgent(PromptAgent):
             batch_assessments = [(False, "", None, "")] * len(all_retrieved_mems_list)
             self.logger.warning(f"In-game answer assessment failed after {max_retries} attempts.")
             
-        if 'parsed_strategy' not in locals() or parsed_strategy is None:
+        if self.use_strategy_memory and ('parsed_strategy' not in locals() or parsed_strategy is None):
             self.strategy_log.append({
                 "turn": self.move_count,
                 "type": "follow",
@@ -533,7 +633,16 @@ class ProactiveQueryAgent(PromptAgent):
         return move, query_list
 
     def chat_step(self, observations, chat_history_str: str):
-        """Custom chat step loop using proactive question generation."""
+        """
+        Custom chat step loop using proactive question generation.
+        
+        This functions identically to `step()`, but instead of choosing a game move,
+        it answers chat-based conversational prompts. It still:
+        1. Evaluates the conversation and generates questions.
+        2. Retrieves relevant long-term memories.
+        3. Injects them into the chat prompt context.
+        4. Queries the LLM to generate a chat response.
+        """
         if not getattr(self, 'enable_chat', False):
             return "", None
             
@@ -541,6 +650,7 @@ class ProactiveQueryAgent(PromptAgent):
         query_list = []
         observations['chat_context'] = chat_history_str
         
+        # 1. Proactive Query Generation for Chat
         summary_text, questions, sum_query = self._generate_summary_and_question(observations)
         if sum_query:
             query_list.append(sum_query)
@@ -550,6 +660,15 @@ class ProactiveQueryAgent(PromptAgent):
         
         # Build prompt injections for all questions by iteratively retrieving memories
         all_retrieved_mems_list = []
+        if not questions:
+            self.current_trajectory.append({
+                "round": observations.get('game_round', self.move_count),
+                "phase": "Chat",
+                "state": board_state,
+                "summary": summary_text,
+                "question": ""
+            })
+            
         for q_dict in questions:
             q_text = q_dict["question"]
             src_id = q_dict["source_memory_id"]
@@ -572,12 +691,17 @@ class ProactiveQueryAgent(PromptAgent):
             
         system_prompt, observation_prompt = PromptAgent._build_prompts(self, observations)
         
-        strat_injection = self._get_strategy_injection_block()
+        wm_injection = f"=== WORKING MEMORY ===\n{self.match_working_memory}\n=====================\n"
+        if self.use_strategy_memory:
+            strat_injection = self._get_strategy_injection_block(env_name)
+            full_injection = wm_injection + "\n" + strat_injection
+        else:
+            full_injection = wm_injection
         if all_retrieved_mems_list:
             combined_injection = self._build_injection_block(all_retrieved_mems_list)
-            observation_prompt = observation_prompt.replace(board_state, strat_injection + "\n\n" + combined_injection + "\n\n" + board_state, 1)
+            observation_prompt = observation_prompt.replace(board_state, full_injection + "\n\n" + combined_injection + "\n\n" + board_state, 1)
         else:
-            observation_prompt = observation_prompt.replace(board_state, strat_injection + "\n\n" + board_state, 1)
+            observation_prompt = observation_prompt.replace(board_state, full_injection + "\n\n" + board_state, 1)
 
         if env_name == 'cooperative_negotiation':
             from gamingbench.prompts.chat_prompts import COOP_CHAT_INSTRUCTION as instruction
@@ -586,7 +710,7 @@ class ProactiveQueryAgent(PromptAgent):
             
         observation_prompt = observation_prompt + '\n\n' + instruction
         
-        observation_prompt += IN_GAME_ASSESSMENT_SUFFIX
+        observation_prompt += IN_GAME_ASSESSMENT_SUFFIX if self.use_strategy_memory else IN_GAME_ASSESSMENT_SUFFIX_NO_STRATEGY
             
         msgs = self.construct_init_messages(system_prompt, observation_prompt)
         
@@ -617,26 +741,27 @@ class ProactiveQueryAgent(PromptAgent):
             try:
                 parsed_json = extract_json_block(stripped_response)
                 
-                # Parse strategy
-                strategy_raw = parsed_json.get("strategy", {})
-                strat_type = strategy_raw.get("type")
-                if strat_type == "follow":
-                    strat_id = strategy_raw.get("strategy_id", "")
-                    if isinstance(strat_id, str):
-                        strat_id = strat_id.strip()
-                    if not strat_id or not self.strategy_store.get_strategy(strat_id):
-                        error_parts.append(f"strategy_id '{strat_id}' not found in strategy store. Use an existing ID or set type to 'new'.")
+                # Parse strategy (only when strategy memory is enabled)
+                if self.use_strategy_memory:
+                    strategy_raw = parsed_json.get("strategy", {})
+                    strat_type = strategy_raw.get("type")
+                    if strat_type == "follow":
+                        strat_id = strategy_raw.get("strategy_id", "")
+                        if isinstance(strat_id, str):
+                            strat_id = strat_id.strip()
+                        if not strat_id or not self.strategy_store.get_strategy(strat_id):
+                            error_parts.append(f"strategy_id '{strat_id}' not found in strategy store. Use an existing ID or set type to 'new'.")
+                        else:
+                            parsed_strategy = strategy_raw
+                    elif strat_type == "new":
+                        required = ["title", "definition", "success_criteria", "failure_criteria"]
+                        missing = [f for f in required if not strategy_raw.get(f, "").strip()]
+                        if missing:
+                            error_parts.append(f"New strategy is missing required fields: {missing}.")
+                        else:
+                            parsed_strategy = strategy_raw
                     else:
-                        parsed_strategy = strategy_raw
-                elif strat_type == "new":
-                    required = ["title", "definition", "success_criteria", "neutral_criteria", "failure_criteria"]
-                    missing = [f for f in required if not strategy_raw.get(f, "").strip()]
-                    if missing:
-                        error_parts.append(f"New strategy is missing required fields: {missing}.")
-                    else:
-                        parsed_strategy = strategy_raw
-                else:
-                    error_parts.append("strategy.type must be 'follow' or 'new'.")
+                        error_parts.append("strategy.type must be 'follow' or 'new'.")
                     
                 assessments = parsed_json.get("assessments", [])
                 expected_len = len(all_retrieved_mems_list)
@@ -651,12 +776,16 @@ class ProactiveQueryAgent(PromptAgent):
                         else:
                             target_idx = idx
                             
+                        src_id = all_retrieved_mems_list[target_idx][0].get("source_memory_id")
                         q_type = item.get("question_type", "new")
                         
-                        if q_type == "direct":
+                        if q_type == "direct" and not src_id:
+                            q_type = "new"
+                            
+                        if q_type == "direct" or bool(src_id):
                             ans = True
                             mem_concl = ""
-                            d_id = all_retrieved_mems_list[target_idx][0].get("source_memory_id")
+                            d_id = src_id
                         else:
                             ans = item.get("answered", False)
                             if isinstance(ans, str):
@@ -685,12 +814,13 @@ class ProactiveQueryAgent(PromptAgent):
                 
             if not error_parts:
                 self.logger.info(f"Chat Generated: {message}")
-                self.strategy_log.append({
-                    "turn": self.move_count,
-                    "type": parsed_strategy["type"],
-                    "strategy_id": parsed_strategy.get("strategy_id"),
-                    "strategy_dict": parsed_strategy if parsed_strategy["type"] == "new" else None
-                })
+                if self.use_strategy_memory and parsed_strategy:
+                    self.strategy_log.append({
+                        "turn": self.move_count,
+                        "type": parsed_strategy["type"],
+                        "strategy_id": parsed_strategy.get("strategy_id"),
+                        "strategy_dict": parsed_strategy if parsed_strategy["type"] == "new" else None
+                    })
                 break
                 
             if attempt < max_retries - 1:
@@ -702,7 +832,7 @@ class ProactiveQueryAgent(PromptAgent):
             batch_assessments = [(False, "", None, "")] * len(all_retrieved_mems_list)
             self.logger.warning(f"In-game answer assessment failed after {max_retries} attempts.")
             
-        if 'parsed_strategy' not in locals() or parsed_strategy is None:
+        if self.use_strategy_memory and ('parsed_strategy' not in locals() or parsed_strategy is None):
             self.strategy_log.append({
                 "turn": self.move_count,
                 "type": "follow",
@@ -726,6 +856,7 @@ class ProactiveQueryAgent(PromptAgent):
             self.question_log.append({
                 "round": observations.get('game_round', self.move_count),
                 "question": q_text,
+                "is_direct_retrieval": bool(src_id),
                 "source_memory_id": src_id,
                 "retrieved_memory_ids": [m["id"] for m in retrieved_mems],
                 "retrieved_memories_text": mem_text if retrieved_mems else "No relevant memories found.",
@@ -746,11 +877,9 @@ class ProactiveQueryAgent(PromptAgent):
         # Log that we are beginning the post-game review process for this specific agent.
         self.logger.info('-' * 20 + f'{self.agent_name} Post-Game Question Log Processing' + '-' * 20)
         
-        # Check if we have a specific player index (e.g., Player 1 or Player 2).
-        player_index = getattr(self, 'current_player_index', None)
-        if player_index is not None:
-            # Replace the generic "Player X" with "You" in the game trajectory so the LLM knows which perspective it is evaluating from.
-            game_history = game_history.replace(f"Player {player_index}", "You")
+        # Identify the agent in the game history so the LLM knows which perspective it is evaluating from.
+        if self.agent_name:
+            game_history = game_history.replace(self.agent_name, f"{self.agent_name} (You)")
 
         # Create a shallow copy of the question log so that if we clear it later, we still retain the data for processing.
         question_log_data = self.question_log.copy()
@@ -780,15 +909,15 @@ class ProactiveQueryAgent(PromptAgent):
         
         # Finally, if we have a valid path to save to (meaning we aren't a temporary clone with /dev/null)...
         if self.store_path != '/dev/null':
-            # Write the updated memory bank back to disk so it's ready for the next game.
             self.store.save(self.store_path)
             
-        new_s = self._process_strategy_log(strategy_log_data, game_history)
-        if new_s:
-            self._merge_new_strategies(new_s)
-            
-        if self.strategy_store_path != '/dev/null':
-            self.strategy_store.save(self.strategy_store_path)
+        if self.use_strategy_memory:
+            new_s = self._process_strategy_log(strategy_log_data, game_history)
+            if new_s:
+                self._merge_new_strategies(new_s)
+                
+            if self.strategy_store_path != '/dev/null':
+                self.strategy_store.save(self.strategy_store_path)
 
     def _process_strategy_log(self, strategy_log, game_history):
         """Scores followed strategies and merges/scores new strategies at the end of a game/batch."""
@@ -818,33 +947,47 @@ class ProactiveQueryAgent(PromptAgent):
         # 2. Score strategies (followed and new)
         scores = self._score_strategies(followed_strats, new_strats, game_history)
         
-        # 3. Apply scores to followed strategies
+        # Extract utility from game_history
+        import re
+        utility = 0.0
+        match = re.search(r"Game Outcome: Your (?:score|net chips)=([-\d.]+)", game_history)
+        if not match:
+            match = re.search(r"Game Outcome: Cooperative final score = ([-\d.]+)", game_history)
+        if match:
+            utility = float(match.group(1))
+        
+        # 3. Apply scores and utility to followed strategies
         for s_id, score in scores.items():
             if s_id.startswith("strat_"):
                 self.strategy_store.update_score(s_id, score)
+                self.strategy_store.update_utility(s_id, utility)
                 
-        # 4. Return new strategies with their scores for batch-level merging
+        # 4. Return new strategies with their scores and utility for batch-level merging
         new_strats_with_scores = []
         if new_strats:
             for idx, s in enumerate(new_strats):
                 temp_id = f"temp_new_{idx}"
-                new_strats_with_scores.append((s, scores.get(temp_id, "neutral")))
+                score = scores.get(temp_id)
+                if score is not None:
+                    new_strats_with_scores.append((s, score, utility))
                 
         return new_strats_with_scores
 
     def _score_strategies(self, followed_strats, new_strats, game_history):
         strategies_to_score_text = ""
         for s in followed_strats:
-            strategies_to_score_text += f"ID: {s['id']}\nTitle: {s['title']}\nDefinition: {s['definition']}\nSuccess Criteria: {s['success_criteria']}\nNeutral Criteria: {s['neutral_criteria']}\nFailure Criteria: {s['failure_criteria']}\n\n"
+            strategies_to_score_text += f"ID: {s['id']}\nTitle: {s['title']}\nDefinition: {s['definition']}\nSuccess Criteria: {s['success_criteria']}\nFailure Criteria: {s['failure_criteria']}\n\n"
             
         for idx, s in enumerate(new_strats):
             temp_id = f"temp_new_{idx}"
-            strategies_to_score_text += f"ID: {temp_id}\nTitle: {s['title']}\nDefinition: {s['definition']}\nSuccess Criteria: {s['success_criteria']}\nNeutral Criteria: {s['neutral_criteria']}\nFailure Criteria: {s['failure_criteria']}\n\n"
+            strategies_to_score_text += f"ID: {temp_id}\nTitle: {s['title']}\nDefinition: {s['definition']}\nSuccess Criteria: {s['success_criteria']}\nFailure Criteria: {s['failure_criteria']}\n\n"
             
         messages = [
             {'role': 'system', 'content': "You are an expert game strategist evaluating the performance of game strategies."},
             {'role': 'user', 'content': STRATEGY_SCORING_PROMPT.format(strategies_to_score=strategies_to_score_text.strip(), game_trajectory=game_history)}
         ]
+        
+        expected_ids = set([s['id'] for s in followed_strats] + [f"temp_new_{idx}" for idx in range(len(new_strats))])
         
         scores_map = {}
         max_retries = 3
@@ -878,13 +1021,18 @@ class ProactiveQueryAgent(PromptAgent):
                 for s in scores:
                     s_id = s.get("strategy_id")
                     score_val = s.get("score", "").lower()
-                    if s_id and score_val in ["success", "neutral", "failure"]:
+                    if s_id and score_val in ["success", "failure"]:
                         scores_map[s_id] = score_val
+                
+                missing_ids = expected_ids - set(scores_map.keys())
+                if missing_ids:
+                    raise ValueError(f"Missing scores for strategies: {missing_ids}")
+                    
                 break
             except Exception as e:
                 self.logger.warning(f"Failed to parse strategy scores on attempt {attempt+1}: {str(e)}")
                 messages.append({"role": "assistant", "content": raw_response})
-                messages.append({"role": "user", "content": "Failed to parse JSON. Please try again with valid JSON format."})
+                messages.append({"role": "user", "content": f"Failed: {str(e)}. Please try again and ensure ALL strategies are scored with exactly 'success' or 'failure'."})
                 
         return scores_map
 
@@ -893,7 +1041,7 @@ class ProactiveQueryAgent(PromptAgent):
             return
             
         new_strats_text = ""
-        for idx, (s, score) in enumerate(new_strats_with_scores):
+        for idx, (s, score, utility) in enumerate(new_strats_with_scores):
             temp_id = f"temp_new_{idx}"
             new_strats_text += f"ID: {temp_id}\nTitle: {s['title']}\nScore: {score}\nDefinition: {s['definition']}\n\n"
             
@@ -930,540 +1078,836 @@ class ProactiveQueryAgent(PromptAgent):
                     except Exception as e:
                         self.logger.error(f"Failed to write to strategy processing log: {e}")
                 
-                for k in parsed_json.get("keep", []):
+                raw_keep = parsed_json.get("keep", [])
+                if not isinstance(raw_keep, list):
+                    raw_keep = [raw_keep]
+                for k in raw_keep:
                     kept_ids.add(k)
                     
                 for g in parsed_json.get("merge_groups", []):
-                    if g.get("keep"):
-                        kept_ids.add(g["keep"])
+                    keep_val = g.get("keep")
+                    if keep_val is not None:
+                        if isinstance(keep_val, list):
+                            for k in keep_val:
+                                kept_ids.add(k)
+                        else:
+                            kept_ids.add(keep_val)
                 break
             except Exception as e:
                 self.logger.warning(f"Failed to parse strategy merge on attempt {attempt+1}: {str(e)}")
                 messages.append({"role": "assistant", "content": raw_response})
                 messages.append({"role": "user", "content": "Failed to parse JSON. Please try again with valid JSON format."})
                 
-        for idx, (s, score) in enumerate(new_strats_with_scores):
+        for idx, (s, score, utility) in enumerate(new_strats_with_scores):
             temp_id = f"temp_new_{idx}"
             if temp_id in kept_ids or not kept_ids:
                 new_id = self.strategy_store.add_strategy(
                     title=s["title"],
                     definition=s["definition"],
                     success_criteria=s["success_criteria"],
-                    neutral_criteria=s["neutral_criteria"],
+                    # neutral_criteria=s.get("neutral_criteria", ""),
                     failure_criteria=s["failure_criteria"]
                 )
                 self.strategy_store.update_score(new_id, score)
+                self.strategy_store.update_utility(new_id, utility)
             
-    def _process_question_log(self, opponent_key, question_log, game_history):
-        """Processes each question asked during the game to verify answers and patch memory gaps."""
-        if not question_log:
-            return [], []
-            
-        # Deduplicate question log entries based on source_memory_id.
-        # If the agent asked for the exact same memory multiple times in one game, we only evaluate it once.
-        deduped_log = []
-        seen_sources_map = {}
-        for q_entry in question_log:
-            src_id = q_entry.get("source_memory_id")
-            if src_id:
-                # Skip this question if we have already seen its source memory ID
-                if src_id in seen_sources_map:
-                    first_entry = seen_sources_map[src_id]
-                    extra = q_entry.get("desired_additional_info", "")
-                    if extra:
-                        first_entry.setdefault("upgrade_requests", []).append(extra)
-                    continue
-                seen_sources_map[src_id] = q_entry
-            # Add novel questions and unique direct memory fetches to the deduplicated log
-            deduped_log.append(q_entry)
-            
-        section_a_blocks = []
-        section_b_blocks = []
-        question_map = {}
-        for idx, q_entry in enumerate(deduped_log):
-            q_id = f"Q{idx+1}"
-            question_map[q_id] = q_entry
-            
-            is_direct = q_entry.get("is_direct_retrieval", False)
-            
-            if is_direct:
-                formatted_q = f"[DIRECT] Question ID: {q_id}\n"
-                formatted_q += f"Question: \"{q_entry['question']}\"\n"
-                
-                existing_mem_content = None
-                lookup_id = q_entry.get("source_memory_id")
-                if lookup_id:
-                    existing_mem = self.store.get_memory(opponent_key, lookup_id)
-                    if existing_mem:
-                        existing_mem_content = existing_mem.get("content", "")
-                if existing_mem_content:
-                    formatted_q += f"CURRENT MEMORY CONTENT: \"{existing_mem_content}\"\n"
-                    
-                if q_entry.get('desired_additional_info'):
-                    formatted_q += f"DESIRED ADDITIONAL INFO: {q_entry['desired_additional_info']}\n"
-                if q_entry.get('upgrade_requests'):
-                    formatted_q += f"UPGRADE REQUESTS:\n" + "\n".join([f"- {req}" for req in q_entry['upgrade_requests']]) + "\n"
-                    
-                section_a_blocks.append(formatted_q)
-            else:
-                formatted_q = f"[NEW] Question ID: {q_id}\n"
-                formatted_q += f"Question: \"{q_entry['question']}\"\n"
-                formatted_q += f"ANSWERED IN-GAME: {q_entry['answered']}\n"
-                if 'memory_conclusion' in q_entry:
-                    formatted_q += f"MEMORY CONCLUSION: {q_entry['memory_conclusion']}\n"
-                if q_entry.get('desired_additional_info'):
-                    formatted_q += f"DESIRED ADDITIONAL INFO: {q_entry['desired_additional_info']}\n"
-                if q_entry.get('upgrade_requests'):
-                    formatted_q += f"UPGRADE REQUESTS:\n" + "\n".join([f"- {req}" for req in q_entry['upgrade_requests']]) + "\n"
-                
-                driving_mem_content = None
-                driving_id = q_entry.get("driving_memory_id")
-                if driving_id:
-                    driving_mem = self.store.get_memory(opponent_key, driving_id)
-                    if driving_mem:
-                        driving_mem_content = driving_mem.get("content", "")
-                if driving_mem_content:
-                    formatted_q += f"DRIVING MEMORY CONTENT: \"{driving_mem_content}\"\n"
-                
-                section_b_blocks.append(formatted_q)
-                
-        question_log_text = ""
-        if section_a_blocks:
-            question_log_text += "=== SECTION A (Direct Retrieval Questions) ===\n\n"
-            question_log_text += "\n---\n".join(section_a_blocks)
-            question_log_text += "\n\n"
-        if section_b_blocks:
-            question_log_text += "=== SECTION B (New Questions) ===\n\n"
-            question_log_text += "\n---\n".join(section_b_blocks)
-            question_log_text += "\n\n"
-            
-        question_log_text = question_log_text.strip()
+    def _run_phase_a(self, opponent_key, q_log, gh, game_rules):
+        """
+        Phase A: Propose new stats per game.
+        Iterates over the question log of a single game.
+        - Unanswered questions trigger proposals for brand new memories.
+        - Existing memories that requested 'desired_additional_info' trigger proposals for new stats for that existing memory.
+        Returns a PhaseAResult containing 'new_memories' and 'desired_infos'.
+        """
+        from gamingbench.ltm.two_layer_prompts import STAT_PROPOSAL_PROMPT
         
-        prompt = POST_GAME_QUESTION_REVIEW_PROMPT.format(
-            question_log=question_log_text,
-            game_trajectory=game_history
+        unanswered_map = {}
+        desired_infos_map = {}
+        
+        n_idx = 0
+        for q_entry in q_log:
+            drv_id = q_entry.get("driving_memory_id")
+            if isinstance(drv_id, list): drv_id = drv_id[0] if drv_id else None
+            is_dr = q_entry.get("is_direct_retrieval")
+            if isinstance(is_dr, list): is_dr = is_dr[0] if is_dr else False
+            dai = q_entry.get("desired_additional_info", "")
+            if isinstance(dai, list): dai = dai[0] if dai else ""
+
+            if not is_dr and not drv_id:
+                q_text = q_entry.get("question", "")
+                if isinstance(q_text, list): q_text = q_text[0] if q_text else ""
+                q_id = f"N_{n_idx}"
+                n_idx += 1
+                if dai:
+                    unanswered_map[q_id] = f"[{q_id}] Question: {q_text}\n  Desired Info: {dai}"
+                else:
+                    unanswered_map[q_id] = f"[{q_id}] {q_text}"
+            elif drv_id and dai:
+                q_entry["driving_memory_id"] = drv_id  # sanitize entry in case it's a list
+                desired_infos_map[drv_id] = q_entry
+                
+        if not unanswered_map and not desired_infos_map:
+            class PhaseAResult:
+                new_memories = []
+                desired_infos = []
+                stat_proposals = []
+            return PhaseAResult()
+            
+        unanswered_str = "[New Unanswered Questions]\n"
+        unanswered_str += "\n".join(unanswered_map.values()) if unanswered_map else "No new unanswered questions."
+        
+        unanswered_str += "\n\n[Existing Memories Requesting Additional Info]\n"
+        if desired_infos_map:
+            for m_id, d in desired_infos_map.items():
+                mem = self.store.get_memory(opponent_key, m_id)
+                if mem:
+                    unanswered_str += f"[{m_id}]\n"
+                    unanswered_str += f"  Memory Question: {mem.get('question', '')}\n"
+                    unanswered_str += f"  Memory Content: {mem.get('content', '')}\n"
+                    unanswered_str += f"  Desired Additional Info: {d['desired_additional_info']}\n"
+                else:
+                    unanswered_str += f"[{m_id}] desired info: {d['desired_additional_info']}\n"
+        else:
+            unanswered_str += "No existing memories requested additional info."
+                
+        prompt = STAT_PROPOSAL_PROMPT.format(
+            game_rules=game_rules,
+            unanswered_questions=unanswered_str,
+            game_trajectory=gh,
+            max_stats_per_memory=self.max_stats_per_memory
         )
         
-        responses, query = self.llm_query([{"role": "user", "content": prompt}], n=1, stop=None, prompt_type='move')
-        raw_resp = responses[0]
-        stripped_resp = strip_thinking_block(raw_resp)
+        msg = [{"role": "user", "content": prompt}]
+        resp, qry = self.llm_query(msg, n=1, stop=None, prompt_type='move')
         
-        self.logger.info("=== QUESTION REVIEW ===")
-        self.logger.info(f"PROMPT:\n{prompt}")
-        self.logger.info(f"RAW ANSWER:\n{raw_resp}")
-        self.logger.info(f"STRIPPED ANSWER:\n{stripped_resp}")
-        self.logger.info("=======================")
+        self._log_prompt("PHASE A: STAT PROPOSAL", prompt, resp[0])
         
-        log_dir = os.path.dirname(self.store_path)
-        if log_dir and log_dir != '/dev/null':
-            q_log_file = os.path.join(log_dir, f"{self.agent_name}_question_processing.log")
-            try:
-                with open(q_log_file, "a") as f:
-                    f.write("=== QUESTION REVIEW ===\n")
-                    f.write(f"PROMPT:\n{prompt}\n")
-                    f.write(f"RAW ANSWER:\n{raw_resp}\n")
-                    f.write(f"STRIPPED ANSWER:\n{stripped_resp}\n")
-                    f.write("=======================\n\n")
-            except Exception as e:
-                self.logger.error(f"Failed to write to question processing log: {e}")
+        parsed = extract_json_block(strip_thinking_block(resp[0]))
+        
+        class PhaseAResult:
+            stat_proposals = parsed.get("stat_proposals", [])
             
-        parsed_json = extract_json_block(stripped_resp)
-        
-        reviews = parsed_json.get("question_reviews", [])
-        if not isinstance(reviews, list):
-            self.logger.error(f"Failed to parse question_reviews as list: {reviews}")
-            return
+        return PhaseAResult()
+    def _run_phase_a_5_merge(self, all_new_proposals, game_rules):
+        """
+        Phase A.5: Batched Memory Consolidation
+        Takes all stat_proposals generated across the batch from Phase A.
+        Asks the LLM to merge conceptually identical proposals into comprehensive ones
+        and combine their proposed_stats.
+        Returns the deduplicated list of proposals.
+        """
+        if len(all_new_proposals) <= 1:
+            return all_new_proposals
             
-        all_new_evidence = []
-        correction_tasks_data = []
-        synthesis_tasks_data = []
+        from gamingbench.ltm.two_layer_prompts import STAT_MEMORY_MERGE_PROMPT
+        import json
         
-        for review in reviews:
-            if not isinstance(review, dict):
-                continue
-                
-            q_id = review.get("question_id")
-            if q_id not in question_map:
-                continue
-                
-            q_entry = question_map[q_id]
-            tag = review.get("tag", "").upper()
-            evidence_list = review.get("evidence", [])
+        # Serialize the proposals for the prompt
+        props_str = ""
+        for i, p in enumerate(all_new_proposals):
+            props_str += f"[{i}]\n{json.dumps(p, indent=2)}\n\n"
             
-            if q_entry.get("is_direct_retrieval"):
-                if tag == "UNANSWERED":
-                    self.logger.warning("[ROUTING GUARD] UNANSWERED tag on a direct-retrieval question. Force-rerouting to MODIFY.")
-                    tag = "MODIFY"
+        prompt = STAT_MEMORY_MERGE_PROMPT.format(
+            game_rules=game_rules,
+            batched_proposals=props_str.strip(),
+            max_stats_per_memory=self.max_stats_per_memory
+        )
+        
+        msg = [{"role": "user", "content": prompt}]
+        resp, qry = self.llm_query(msg, n=1, stop=None, prompt_type='move')
+        
+        self._log_prompt("PHASE A.5: BATCHED MEMORY CONSOLIDATION", prompt, resp[0])
+        
+        parsed = extract_json_block(strip_thinking_block(resp[0]))
+        
+        raw_keep = parsed.get("keep", [])
+        if not isinstance(raw_keep, list):
+            raw_keep = [raw_keep]
+        # Sanitize to flatten any nested lists that the LLM mistakenly outputs
+        sanitized_keep = []
+        for item in raw_keep:
+            if isinstance(item, list):
+                sanitized_keep.extend(item)
             else:
-                if tag == "UNANSWERED" and q_entry.get("driving_memory_id"):
-                    self.logger.warning("[ROUTING GUARD] UNANSWERED tag on a new question that has a driving_memory_id. Force-rerouting to MODIFY.")
-                    tag = "MODIFY"
-            if tag == "REINFORCE":
-                # PATH 1: REINFORCE
-                for m_id in q_entry.get("retrieved_memory_ids", []):
-                    self.store.update_score(opponent_key, m_id, 1)
+                sanitized_keep.append(item)
+        keep_indices = set(sanitized_keep)
+        
+        for group in parsed.get("merge_groups", []):
+            if "keep" in group:
+                val = group["keep"]
+                if isinstance(val, list):
+                    for v in val:
+                        keep_indices.add(v)
+                else:
+                    keep_indices.add(val)
                 
-                if isinstance(evidence_list, list) and len(evidence_list) > 0:
-                    for ev in evidence_list:
-                        if isinstance(ev, dict):
-                            ev_content = ev.get("content", "")
-                            db_vec = self.embedder.encode(ev_content, is_query=False).tolist()
-                            ev_id = self.store.add_evidence(
-                                key=opponent_key,
-                                content=ev_content,
-                                observation=f"Supporting evidence for question: '{q_entry['question']}'. Original observation: {ev.get('observation', '')}",
-                                game_id=f"game_{getattr(self, 'game_count', 0)}",
-                                vec=db_vec
-                            )
-                            for m_id in q_entry.get("retrieved_memory_ids", []):
-                                mem = self.store.get_memory(opponent_key, m_id)
-                                if mem and ev_id not in mem.get('evidence_ids', []):
-                                    mem.setdefault('evidence_ids', []).append(ev_id)
-                                    mem['evidence_ids'] = mem['evidence_ids'][-self.max_evidence_per_memory:]
-                                    
-            elif tag == "MODIFY":
-                # PATH 2: MODIFY
-                culprit_id = q_entry.get("driving_memory_id")
-                if not culprit_id:
-                    ret_mems = q_entry.get("retrieved_memory_ids", [])
-                    culprit_id = q_entry.get("source_memory_id") or (ret_mems[0] if ret_mems else None)
-                    
-                if culprit_id:
-                    self.store.update_score(opponent_key, culprit_id, -1)
-                    current_mem = self.store.get_memory(opponent_key, culprit_id)
-                    
-                    if current_mem and isinstance(evidence_list, list) and len(evidence_list) > 0:
-                        desired_info = q_entry.get("desired_additional_info", "")
-                        upgrade_reqs = q_entry.get("upgrade_requests", [])
-                        if upgrade_reqs:
-                            desired_info = " / ".join(upgrade_reqs)
-                            
-                        ev_prefix = "Corrective and Enrichment" if desired_info else "Corrective"
-                        
-                        new_ev_blocks = []
-                        new_ev_ids = []
-                        for item in evidence_list:
-                            if isinstance(item, dict):
-                                ev_content = item.get("content", "")
-                                db_vec = self.embedder.encode(ev_content, is_query=False).tolist()
-                                obs_text = f"{ev_prefix} evidence for question: '{q_entry['question']}'."
-                                if desired_info:
-                                    obs_text += f" Desired enrichment: '{desired_info}'."
-                                obs_text += f" Original observation: {item.get('observation', '')}"
-                                
-                                ev_id = self.store.add_evidence(
-                                    key=opponent_key,
-                                    content=ev_content,
-                                    observation=obs_text,
-                                    game_id=f"game_{getattr(self, 'game_count', 0)}",
-                                    vec=db_vec
-                                )
-                                new_ev_ids.append(ev_id)
-                                new_ev_blocks.append(f"EVIDENCE ID: {ev_id}\nCONTENT: {item.get('content')}\nOBSERVATION: {item.get('observation')}")
-                        
-                        correcting_evidence_str = "\n\n---\n\n".join(new_ev_blocks)
-                        
-                        old_ev_blocks = []
-                        for eid in current_mem.get('evidence_ids', []):
-                            ev = self.store.get_evidence(opponent_key, eid)
-                            if ev:
-                                old_ev_blocks.append(f"EVIDENCE ID: {eid}\nCONTENT: {ev.get('content')}")
-                        supporting_evidence_str = "\n\n---\n\n".join(old_ev_blocks) if old_ev_blocks else "No supporting historical evidence."
-                        
-                        correction_tasks_data.append({
-                            "memory_id": culprit_id,
-                            "question": q_entry['question'],
-                            "current_memory_content": current_mem['content'],
-                            "supporting_evidence": supporting_evidence_str,
-                            "correcting_evidence": correcting_evidence_str,
-                            "new_ev_ids": new_ev_ids,
-                            "desired_additional_info": desired_info
-                        })
-            elif tag == "UNANSWERED":
-                # PATH 3: UNANSWERED
-                if isinstance(evidence_list, list) and len(evidence_list) > 0:
-                    new_ev_blocks = []
-                    new_ev_ids = []
-                    for item in evidence_list:
-                        if isinstance(item, dict):
-                            ev_content = item.get("content", "")
-                            db_vec = self.embedder.encode(ev_content, is_query=False).tolist()
-                            ev_id = self.store.add_evidence(
-                                key=opponent_key,
-                                content=ev_content,
-                                observation=f"Answer to previously unanswered question: '{q_entry['question']}'. Original observation: {item.get('observation', '')}",
-                                game_id=f"game_{getattr(self, 'game_count', 0)}",
-                                vec=db_vec
-                            )
-                            new_ev_ids.append(ev_id)
-                            new_ev_blocks.append(f"EVIDENCE ID: {ev_id}\nCONTENT: {item.get('content')}\nOBSERVATION: {item.get('observation')}")
-                    
-                    new_evidence_str = "\n\n---\n\n".join(new_ev_blocks)
-                    
-                    desired_info = q_entry.get("desired_additional_info", "")
-                    upgrade_reqs = q_entry.get("upgrade_requests", [])
-                    if upgrade_reqs:
-                        desired_info = " / ".join(upgrade_reqs)
-                        
-                    synthesis_tasks_data.append({
-                        "question": q_entry['question'],
-                        "new_evidence_list": new_evidence_str,
-                        "new_ev_ids": new_ev_ids,
-                        "desired_additional_info": desired_info
-                    })
+        merged_proposals = []
+        for idx in keep_indices:
+            if isinstance(idx, int) and 0 <= idx < len(all_new_proposals):
+                merged_proposals.append(all_new_proposals[idx])
+            elif isinstance(idx, str) and idx.isdigit() and 0 <= int(idx) < len(all_new_proposals):
+                merged_proposals.append(all_new_proposals[int(idx)])
+                
+        return merged_proposals
 
-        return correction_tasks_data, synthesis_tasks_data
 
-    def _execute_batched_corrections(self, opponent_key, correction_tasks_data):
-        """Processes all accumulated memory modifications (Path 2) across a batch into a single LLM call."""
-        # 1. Early exit if there are no correction tasks.
-        if correction_tasks_data:
-            formatted_tasks = []
-            ev_id_map = {}
+    def _run_phase_b(self, opponent_key, all_proposed_stats, game_rules):
+        """
+        Phase B: Batched Stat Definition.
+        Takes all proposed stats from all games in the current batch (from Phase A).
+        For each proposed stat, performs a semantic search against the StatPool.
+        Makes ONE LLM call to decide whether each proposed stat should 'inherit' an existing stat
+        or 'define_new' to instantiate a completely new one.
+        Returns a mapping from the global list index to the final resolved stat_id.
+        """
+        if not all_proposed_stats:
+            return {}
             
-            # 2. Group tasks by memory_id to avoid prompt duplication and evidence overwrite bugs
-            grouped_tasks = {}
-            for task in correction_tasks_data:
-                m_id = task["memory_id"]
-                if m_id not in grouped_tasks:
-                    grouped_tasks[m_id] = {
-                        "memory_id": m_id,
-                        "questions": set(),
-                        "current_memory_content": task["current_memory_content"],
-                        "supporting_evidence": task["supporting_evidence"],
-                        "correcting_evidence": [],
-                        "new_ev_ids": [],
-                        "desired_additional_info": set()
-                    }
-                grouped_tasks[m_id]["questions"].add(task["question"])
-                if task["correcting_evidence"]:
-                    grouped_tasks[m_id]["correcting_evidence"].append(task["correcting_evidence"])
-                if task["new_ev_ids"]:
-                    grouped_tasks[m_id]["new_ev_ids"].extend(task["new_ev_ids"])
-                if task.get("desired_additional_info"):
-                    grouped_tasks[m_id]["desired_additional_info"].add(task["desired_additional_info"])
+        from gamingbench.ltm.two_layer_prompts import STAT_DEFINITION_PROMPT
+        
+        global_resolved_stats = {}
+        chunk_size = 20
+        chunks = [all_proposed_stats[i:i + chunk_size] for i in range(0, len(all_proposed_stats), chunk_size)]
+        
+        for chunk_idx, chunk in enumerate(chunks):
+            global_offset = chunk_idx * chunk_size
+            batched_proposals = ""
             
-            # 3. Format the grouped tasks
-            for m_id, task in grouped_tasks.items():
-                # Dedup the new evidence IDs and map them to the memory
-                ev_id_map[m_id] = list(set(task["new_ev_ids"]))
+            for local_i, prop in enumerate(chunk):
+                sdesc = prop.get("description", "")
+                spseudo = prop.get("pseudocode", "")
+                if not isinstance(spseudo, str): spseudo = __import__('json').dumps(spseudo) if spseudo else ""
+                stype = prop.get("type", "")
+                if not sdesc or not stype: continue
                 
-                questions_str = " / ".join(task["questions"])
-                corr_ev_str = "\n\n---\n\n".join(task["correcting_evidence"]) if task["correcting_evidence"] else "No correcting evidence provided."
+                query_vec = self.embedder.encode(sdesc, is_query=True)
+                candidate_ids = self.stat_pool.find_relevant_stats(opponent_key, query_vec, top_k=3, stat_type=stype)
+                pool_summary = self.stat_pool.format_pool_summary(opponent_key, candidate_ids)
                 
-                # 4. Format the task block with the grouped context
-                task_str = f"--- TASK ID: {m_id} ---\nQUESTIONS IT ANSWERS: \"{questions_str}\"\nCURRENT MEMORY CONTENT: \"{task['current_memory_content']}\"\nSUPPORTING HISTORICAL EVIDENCE:\n{task['supporting_evidence']}\nNEW EVIDENCE FOR MODIFICATION:\n{corr_ev_str}"
+                batched_proposals += f"[{local_i}] Proposed Type: {stype}\nProposed Desc: {sdesc}\nCandidates:\n{pool_summary}\n\n"
                 
-                if task["desired_additional_info"]:
-                    desired_info_str = " / ".join(task["desired_additional_info"])
-                    task_str += f"\nDESIRED ADDITIONAL INFO (Agent Request): \"{desired_info_str}\""
-                    
-                formatted_tasks.append(task_str)
-            
-            # 5. Join all formatted tasks into a single large prompt string.
-            correction_tasks_str = "\n\n".join(formatted_tasks)
-            # 6. Inject the tasks into the correction prompt template.
-            from gamingbench.ltm.two_layer_prompts import PQA_MEMORY_MODIFY_PROMPT
-            correction_prompt = PQA_MEMORY_MODIFY_PROMPT.format(modification_tasks=correction_tasks_str)
-            
-            # 7. Query the LLM to rewrite all faulty memories at once.
-            msg = [{"role": "user", "content": correction_prompt}]
-            resp, qry = self.llm_query(msg, n=1, stop=None, prompt_type='move')
-            
-            # 8. Log the input and output to standard logging.
-            self.logger.info("=== TARGETED MEMORY CORRECTION (BATCHED) ===")
-            self.logger.info(f"PROMPT:\n{correction_prompt}")
-            self.logger.info(f"RAW ANSWER:\n{resp[0]}")
-            self.logger.info("============================================")
-            
-            # 9. Also append this transaction to the dedicated question_processing log file.
-            log_dir = os.path.dirname(self.store_path)
-            if log_dir and log_dir != '/dev/null':
-                q_log_file = os.path.join(log_dir, f"{self.agent_name}_question_processing.log")
-                try:
-                    with open(q_log_file, "a") as f:
-                        f.write("=== TARGETED MEMORY CORRECTION (BATCHED) ===\n")
-                        f.write(f"PROMPT:\n{correction_prompt}\n")
-                        f.write(f"RAW ANSWER:\n{resp[0]}\n")
-                        f.write("============================================\n\n")
-                except Exception as e:
-                    self.logger.error(f"Failed to write correction to question processing log: {e}")
-            
-            # 10. Extract and parse the JSON returned by the LLM.
-            parsed = extract_json_block(strip_thinking_block(resp[0]))
-            corrections = parsed.get("modifications", [])
-            
-            # 11. Iterate through the LLM's suggested memory rewrites.
-            if isinstance(corrections, list):
-                for corr in corrections:
-                    if not isinstance(corr, dict): continue
-                    m_id = corr.get("memory_id")
-                    new_content = corr.get("memory_content")
-                    
-                    # 12. If a valid memory ID and rewritten content are provided...
-                    if m_id and new_content:
-                        # 13. Create a new vector embedding for the updated text.
-                        vec = self.embedder.encode(new_content, is_query=False)
-                        # 14. Update the memory in the database, merging the old content with the new.
-                        # It pulls the corresponding new evidence IDs from the ev_id_map we created earlier.
-                        # NOTE: we intentionally do NOT pass a `question` parameter here — the question
-                        # field of a memory is immutable and must never be overwritten by the LLM output.
-                        self.store.update_memory(
-                            key=opponent_key,
-                            memory_id=m_id,
-                            new_content=new_content,
-                            new_evidence_ids=ev_id_map.get(m_id, []),
-                            vec=vec,
-                            max_evidence_per_memory=self.max_evidence_per_memory
-                        )
-
-    def _execute_batched_synthesis(self, opponent_key, synthesis_tasks_data):
-        """Processes all unanswered questions (Path 3) across a batch to synthesize brand new memories."""
-        # 1. Early exit if there are no unanswered synthesis tasks.
-        if synthesis_tasks_data:
-            formatted_tasks = []
-            all_new_ev_ids = set()
-            relevant_historical_ev_ids = set()
-            
-            # 2. Iterate through each unanswered question to gather relevant background evidence.
-            for task in synthesis_tasks_data:
-                # Keep track of all new evidence IDs generated so we don't accidentally retrieve them as "historical" evidence below.
-                all_new_ev_ids.update(task["new_ev_ids"])
+            if not batched_proposals:
+                continue
                 
-                # 3. We want to supply the LLM with older, historical facts that might help answer the question.
-                # We combine the question and the new evidence into a single query vector.
-                combined_query = f"Question: {task['question']}\nNew Evidence:\n{task['new_evidence_list']}"
-                query_vec = self.embedder.encode(combined_query, is_query=True)
-                
-                # 4. Perform a semantic search on the evidence database (Layer 1) to find the top 3 most relevant historical facts.
-                top_ev = self.store.find_relevant_evidence(opponent_key, query_vec, top_k=3)
-                for ev in top_ev:
-                    relevant_historical_ev_ids.add(ev["id"])
-                
-                # 5. Format the question and the new evidence into a task block.
-                task_str = f"--- QUESTION: \"{task['question']}\" ---\nNEW EVIDENCE:\n{task['new_evidence_list']}"
-                if task.get("desired_additional_info"):
-                    task_str += f"\nDESIRED ADDITIONAL INFO (Agent Request): \"{task['desired_additional_info']}\""
-                formatted_tasks.append(task_str)
-            
-            # 6. Join all tasks into a single string to inject into the prompt.
-            synthesis_tasks_str = "\n\n".join(formatted_tasks)
-            
-            # 7. Collect the actual content strings for the historical evidence IDs we found during semantic search.
-            all_ev = self.store.get_all_evidence(opponent_key)
-            related_ev_blocks = []
-            for ev in all_ev:
-                # Ensure we only include historical evidence (and exclude the brand new evidence we just generated this batch).
-                if ev["id"] in relevant_historical_ev_ids and ev["id"] not in all_new_ev_ids:
-                    related_ev_blocks.append(f"EVIDENCE ID: {ev['id']}\nCONTENT: {ev['content']}")
-            
-            # 8. Combine the historical evidence blocks into a string.
-            related_evidence_str = "\n\n---\n\n".join(related_ev_blocks) if related_ev_blocks else "No related historical evidence."
-            
-            # 9. Format the synthesis prompt with the tasks and the supplementary historical evidence.
-            synthesis_prompt = PQA_UNANSWERED_SYNTHESIS_PROMPT.format(
-                synthesis_tasks=synthesis_tasks_str,
-                related_evidence_list=related_evidence_str
+            prompt = STAT_DEFINITION_PROMPT.format(
+                game_rules=game_rules,
+                batched_proposals=batched_proposals.strip()
             )
             
-            # 10. Query the LLM to synthesize entirely new memories from these unanswered questions.
-            msg = [{"role": "user", "content": synthesis_prompt}]
+            msg = [{"role": "user", "content": prompt}]
             resp, qry = self.llm_query(msg, n=1, stop=None, prompt_type='move')
             
-            # 11. Log to standard console.
-            self.logger.info("=== UNANSWERED QUESTION SYNTHESIS (BATCHED) ===")
-            self.logger.info(f"PROMPT:\n{synthesis_prompt}")
-            self.logger.info(f"RAW ANSWER:\n{resp[0]}")
-            self.logger.info("===============================================")
+            self._log_prompt(f"PHASE B: BATCHED STAT DEFINITION (CHUNK {chunk_idx+1}/{len(chunks)})", prompt, resp[0])
             
-            # 12. Log to the dedicated question_processing log file.
-            log_dir = os.path.dirname(self.store_path)
-            if log_dir and log_dir != '/dev/null':
-                q_log_file = os.path.join(log_dir, f"{self.agent_name}_question_processing.log")
-                try:
-                    with open(q_log_file, "a") as f:
-                        f.write("=== UNANSWERED QUESTION SYNTHESIS (BATCHED) ===\n")
-                        f.write(f"PROMPT:\n{synthesis_prompt}\n")
-                        f.write(f"RAW ANSWER:\n{resp[0]}\n")
-                        f.write("===============================================\n\n")
-                except Exception as e:
-                    self.logger.error(f"Failed to write synthesis to question processing log: {e}")
-            
-            # 13. Parse the JSON response to extract the new memory objects.
             parsed = extract_json_block(strip_thinking_block(resp[0]))
-            new_memories = parsed.get("new_memories", [])
+            decisions = parsed.get("decisions", [])
             
-            # 14. Iterate through the newly synthesized memories.
-            if isinstance(new_memories, list):
-                for mem in new_memories:
-                    if not isinstance(mem, dict): continue
-                    q = mem.get("question")
-                    new_content = mem.get("memory_content")
-                    used_ev_ids = mem.get("evidence_ids_used", [])
-                    if not isinstance(used_ev_ids, list):
-                        used_ev_ids = []
+            # Pass 1: Resolve 'inherit' and 'define_new'
+            for dec in decisions:
+                local_i = dec.get("local_idx")
+                if local_i is None: continue
+                try: local_i = int(local_i)
+                except ValueError: continue
+                
+                if local_i < 0 or local_i >= len(chunk):
+                    continue
+                
+                global_i = global_offset + local_i
+                
+                action = dec.get("action")
+                if action == "inherit":
+                    global_resolved_stats[global_i] = dec.get("stat_id")
+                elif action == "define_new":
+                    prop = chunk[local_i]
+                    stype = prop.get("type")
+                    sdesc = prop.get("description", "")
+                    spseudo = prop.get("pseudocode", "")
+                    if not isinstance(spseudo, str): spseudo = __import__('json').dumps(spseudo) if spseudo else ""
+                    if stype and sdesc:
+                        vec = self.embedder.encode(sdesc, is_query=False).tolist()
+                        try:
+                            new_id = self.stat_pool.add_stat(opponent_key, stype, sdesc, spseudo, vec)
+                            global_resolved_stats[global_i] = new_id
+                        except ValueError as e:
+                            self.logger.warning(f"Failed to add stat: {e}")
+                            
+            # Pass 2: Resolve 'inherit_from_local' cross-references
+            for dec in decisions:
+                local_i = dec.get("local_idx")
+                if local_i is None: continue
+                try: local_i = int(local_i)
+                except ValueError: continue
+                
+                if local_i < 0 or local_i >= len(chunk):
+                    continue
+                
+                global_i = global_offset + local_i
+                
+                action = dec.get("action")
+                if action == "inherit_from_local":
+                    target_local_idx = dec.get("target_local_idx")
+                    if target_local_idx is None: continue
+                    try: target_local_idx = int(target_local_idx)
+                    except ValueError: continue
                     
-                    # 15. If a valid question and memory content exist...
-                    if q and new_content:
-                        # 16. Embed the new memory for semantic storage.
-                        vec = self.embedder.encode(new_content, is_query=False)
-                        # 17. Add the brand new memory to the Layer 2 database, attaching the specific evidence IDs it used.
-                        self.store.add_memory(
-                            key=opponent_key,
-                            content=new_content,
-                            evidence_ids=used_ev_ids,
-                            vec=vec,
-                            max_evidence_per_memory=self.max_evidence_per_memory,
-                            question=q
-                        )
+                    curr_target_local = target_local_idx
+                    depth = 0
+                    resolved_id = None
+                    
+                    while depth < 5:
+                        curr_target_global = global_offset + curr_target_local
+                        if curr_target_global in global_resolved_stats:
+                            resolved_id = global_resolved_stats[curr_target_global]
+                            break
+                        
+                        found_next = False
+                        for d in decisions:
+                            try:
+                                if int(d.get("local_idx", -1)) == curr_target_local and d.get("action") == "inherit_from_local":
+                                    curr_target_local = int(d.get("target_local_idx", -1))
+                                    found_next = True
+                                    break
+                            except (ValueError, TypeError):
+                                pass
+                                
+                        if not found_next or curr_target_local == -1:
+                            break
+                        depth += 1
+                        
+                    if resolved_id:
+                        global_resolved_stats[global_i] = resolved_id
+                    else:
+                        try:
+                            original_proposal = chunk[local_i]
+                            stype = original_proposal.get("type")
+                            sdesc = original_proposal.get("description", "")
+                            spseudo = original_proposal.get("pseudocode", "")
+                            if not isinstance(spseudo, str): spseudo = __import__('json').dumps(spseudo) if spseudo else ""
+                            if stype and sdesc:
+                                vec = self.embedder.encode(sdesc, is_query=False).tolist()
+                                try:
+                                    new_id = self.stat_pool.add_stat(opponent_key, stype, sdesc, spseudo, vec)
+                                    global_resolved_stats[global_i] = new_id
+                                except ValueError as e:
+                                    self.logger.warning(f"Failed to add fallback stat: {e}")
+                        except IndexError:
+                            pass
+                            
+            # Ensure every input stat IN THIS CHUNK has a resolved ID, fallback to defining new
+            for local_i, prop in enumerate(chunk):
+                global_i = global_offset + local_i
+                if global_i not in global_resolved_stats:
+                    stype = prop.get("type", "")
+                    sdesc = prop.get("description", "")
+                    spseudo = prop.get("pseudocode", "")
+                    if not isinstance(spseudo, str): spseudo = __import__('json').dumps(spseudo) if spseudo else ""
+                    if stype and sdesc:
+                        vec = self.embedder.encode(sdesc, is_query=False).tolist()
+                        try:
+                            new_id = self.stat_pool.add_stat(opponent_key, stype, sdesc, spseudo, vec)
+                            global_resolved_stats[global_i] = new_id
+                        except ValueError:
+                            pass
+                            
+        return global_resolved_stats
+
+    def _run_stat_update(self, opponent_key, gh, game_rules, existing_stat_ids, newly_resolved_ids):
+        """
+        Phase 1: Numerical Stat Update.
+        Runs per game. Takes the list of ALL stat IDs that need updates 
+        (both previously existing stats and the newly resolved stats from Phase B).
+        The LLM receives the game trajectory and returns delta updates (counts, distributions, etc.).
+        Applies these deltas to the StatPool.
+        Returns a mapping of memory_id -> list of changed stat_ids to inform Phase C.
+        """
+        from gamingbench.ltm.two_layer_prompts import STAT_UPDATE_PROMPT
+        
+        all_stat_ids = list(set(existing_stat_ids + newly_resolved_ids))
+        if not all_stat_ids:
+            return {}
+            
+        chunk_size = 20
+        chunks = [all_stat_ids[i:i + chunk_size] for i in range(0, len(all_stat_ids), chunk_size)]
+        all_updates = []
+        
+        def process_chunk(chunk_ids, chunk_idx):
+            stat_list_str = ""
+            for sid in chunk_ids:
+                if opponent_key in self.stat_pool.stats and sid in self.stat_pool.stats[opponent_key]:
+                    stat = self.stat_pool.stats[opponent_key][sid]
+                    current_vals = ", ".join([f"{k}={v}" for k,v in stat["storage"].items()])
+                    sdesc_val = stat.get('description', '')
+                    spseudo = stat.get('pseudocode', '')
+                    stat_list_str += f"[{sid}] {stat['type']}:\n  Desc: {sdesc_val}\n  Logic: {spseudo}\n  Current: {current_vals}\n\n"
+                    
+            if not stat_list_str:
+                return []
+                
+            prompt = STAT_UPDATE_PROMPT.format(
+                game_rules=game_rules,
+                game_trajectory=gh,
+                stat_list=stat_list_str.strip()
+            )
+            
+            msg = [{"role": "user", "content": prompt}]
+            resp, qry = self.llm_query(msg, n=1, stop=None, prompt_type='move')
+            
+            self._log_prompt(f"PHASE 1: NUMERICAL STAT UPDATE (CHUNK {chunk_idx+1}/{len(chunks)})", prompt, resp[0])
+            
+            parsed = extract_json_block(strip_thinking_block(resp[0]))
+            return parsed.get("stat_updates", [])
+            
+        if chunks:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(chunks))) as executor:
+                futures = [executor.submit(process_chunk, c, i) for i, c in enumerate(chunks)]
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        all_updates.extend(future.result())
+                    except Exception as e:
+                        self.logger.error(f"Error processing Phase 1 stat update chunk: {e}")
+                        
+        self.stat_pool.update_stats(opponent_key, "batch", all_updates)
+        
+        changed_stat_info = {}
+        for upd in all_updates:
+            sid = upd.get("stat_id")
+            deltas = upd.get("deltas", {})
+            is_non_zero = False
+            for k, v in deltas.items():
+                if isinstance(v, dict):
+                    for k2, v2 in v.items():
+                        if v2 not in (0, 0.0, None, "", []): is_non_zero = True
+                else:
+                    if v not in (0, 0.0, None, "", []): is_non_zero = True
+                    
+            if is_non_zero:
+                if opponent_key in self.stat_pool.stats and sid in self.stat_pool.stats[opponent_key]:
+                    refs = self.stat_pool.stats[opponent_key][sid].get("referenced_by", [])
+                    for mem_id in refs:
+                        if mem_id not in changed_stat_info:
+                            changed_stat_info[mem_id] = []
+                        changed_stat_info[mem_id].append(sid)
+                        
+        return changed_stat_info
+
+    def _run_memory_content_update(self, opponent_key, game_rules, changed_stat_info, desired_infos, resolved_stats_map, all_proposed_stats):
+        """
+        Phase C: Existing Memory Content Update.
+        Updates the textual content of existing memories.
+        Triggered if:
+        1. The memory has stats whose numerical values just changed in Phase 1 (across all games in the batch).
+        2. The memory requested 'desired_additional_info' in Phase A.
+        The LLM also manages stat eviction if the memory exceeds the 10-stat cap by
+        returning an 'evict_stat_ids' list.
+        """
+        from gamingbench.ltm.two_layer_prompts import MEMORY_CONTENT_UPDATE_PROMPT
+        
+        desired_map = {}
+        desired_stat_additions = {}
+        
+        for d in desired_infos:
+            mid = d.get("memory_id")
+            if not mid: continue
+            
+            info_req = d.get("desired_additional_info")
+            if not info_req:
+                info_req = "Detailed investigation requested."
+                
+            if mid not in desired_map:
+                desired_map[mid] = []
+            if info_req not in desired_map[mid]:
+                desired_map[mid].append(info_req)
+            
+            added = []
+            for p_stat in d.get("proposed_stats", []):
+                for i, glob_p in enumerate(all_proposed_stats):
+                    if glob_p is p_stat and i in resolved_stats_map:
+                        added.append(resolved_stats_map[i])
+            if added:
+                if mid not in desired_stat_additions:
+                    desired_stat_additions[mid] = []
+                desired_stat_additions[mid].extend(added)
+                
+        all_mems = set(list(changed_stat_info.keys()) + list(desired_map.keys()))
+        if not all_mems:
+            return
+            
+        mem_blocks = []
+        all_mems_list = list(all_mems)
+        chunk_size = 10
+        chunks = [all_mems_list[i:i + chunk_size] for i in range(0, len(all_mems_list), chunk_size)]
+        
+        all_content_updates = []
+        
+        def process_chunk(chunk_mems, chunk_idx):
+            c_mem_blocks = []
+            for m_id in chunk_mems:
+                mem = self.store.get_memory(opponent_key, m_id)
+                if not mem: continue
+                
+                q = mem.get("question", "Unknown")
+                content = mem.get("content", "")
+                stat_ids = mem.get("stat_ids", [])
+                
+                new_additions = list(dict.fromkeys(desired_stat_additions.get(m_id, [])))
+                unique_total_stats = set(stat_ids + new_additions)
+                total_after = len(unique_total_stats)
+                
+                changed_for_this = changed_stat_info.get(m_id, [])
+                unchanged = [s for s in stat_ids if s not in changed_for_this]
+                
+                block = f"[{m_id}] Question: \"{q}\"\nCurrent content: \"{content}\"\n"
+                if changed_for_this:
+                    block += f"Updated stats: {self.stat_pool.format_for_injection(opponent_key, changed_for_this)}\n"
+                if unchanged:
+                    block += f"Unchanged stats: {self.stat_pool.format_for_injection(opponent_key, unchanged)}\n"
+                if m_id in desired_map:
+                    valid_infos = [str(x) for x in desired_map[m_id] if x]
+                    if valid_infos:
+                        joined_info = " | ".join(valid_infos)
+                        block += f"Requested additional info: {joined_info}\n"
+                if new_additions:
+                    block += f"Newly added trackers for this info: {self.stat_pool.format_for_injection(opponent_key, new_additions)}\n"
+                
+                block += f"Total statistical trackers attached to this memory: {total_after}\n"
+                if total_after > self.max_stats_per_memory:
+                    block += f"WARNING: You are tracking {total_after} stats, exceeding the limit of {self.max_stats_per_memory}! You MUST evict at least {total_after - self.max_stats_per_memory} stats via `evict_stat_ids`.\n"
+                c_mem_blocks.append(block)
+                
+            if not c_mem_blocks:
+                return []
+                
+            prompt = MEMORY_CONTENT_UPDATE_PROMPT.format(
+                game_rules=game_rules,
+                changed_memories="\n\n".join(c_mem_blocks),
+                max_stats_per_memory=self.max_stats_per_memory
+            )
+            
+            msg = [{"role": "user", "content": prompt}]
+            resp, qry = self.llm_query(msg, n=1, stop=None, prompt_type='move')
+            
+            self._log_prompt(f"PHASE C: EXISTING MEMORY CONTENT UPDATE (CHUNK {chunk_idx+1}/{len(chunks)})", prompt, resp[0])
+            
+            parsed = extract_json_block(strip_thinking_block(resp[0]))
+            return parsed.get("content_updates", [])
+            
+        if chunks:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(chunks))) as executor:
+                futures = [executor.submit(process_chunk, c, i) for i, c in enumerate(chunks)]
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        all_content_updates.extend(future.result())
+                    except Exception as e:
+                        self.logger.error(f"Error processing Phase C memory update chunk: {e}")
+        
+        for upd in all_content_updates:
+            m_id = upd.get("memory_id")
+            if not m_id: continue
+            mem = self.store.get_memory(opponent_key, m_id)
+            if not mem: continue
+            
+            if upd.get("update") and upd.get("new_content"):
+                mem["content"] = upd["new_content"]
+                vec = self.embedder.encode(upd["new_content"], is_query=False)
+                mem["vec"] = vec.tolist()
+                mem["generation"] = mem.get("generation", 0) + 1
+                mem["updated_at"] = time.time()
+                
+            new_adds = list(dict.fromkeys(desired_stat_additions.get(m_id, [])))
+            for sid in new_adds:
+                if sid not in mem.get("stat_ids", []):
+                    mem.setdefault("stat_ids", []).append(sid)
+                    self.stat_pool.add_reference(opponent_key, sid, m_id)
+                    
+            evict_ids = upd.get("evict_stat_ids") or []
+            for ev in evict_ids:
+                if ev in mem["stat_ids"] and ev not in new_adds:
+                    mem["stat_ids"].remove(ev)
+                    self.stat_pool.remove_reference(opponent_key, ev, m_id)
+
+    def _run_new_memory_finalization(self, opponent_key, new_questions, resolved_stats_map, all_proposed_stats, game_rules):
+        """
+        Phase D: New Memory Finalization.
+        Finalizes brand new memories proposed in Phase A.
+        Provides the LLM with the new questions and the fully resolved newly created stats (with initial values).
+        The LLM outputs the finalized textual content, ensuring the text aligns with the assigned trackers.
+        The finalized memory is then saved to the TwoLayerStore.
+        """
+        import uuid
+        if not new_questions:
+            return
+            
+        from gamingbench.ltm.two_layer_prompts import NEW_MEMORY_FINALIZATION_PROMPT
+        
+        mem_blocks = []
+        mem_map = {}
+        for i, draft in enumerate(new_questions):
+            q = draft.get("question")
+            dai = draft.get("desired_info")
+            
+            added = []
+            for p_stat in draft.get("proposed_stats", []):
+                for glob_idx, glob_p in enumerate(all_proposed_stats):
+                    if glob_p is p_stat and glob_idx in resolved_stats_map:
+                        added.append(resolved_stats_map[glob_idx])
+            
+            added = list(dict.fromkeys(added))
+            mem_map[i] = {"draft": draft, "added": added}
+            
+            block = f"[Question {i}] \"{q}\"\n"
+            if dai:
+                block += f"Desired Info: \"{dai}\"\n"
+            if added:
+                block += f"Resolved trackers with initial values:\n{self.stat_pool.format_for_injection(opponent_key, added)}\n"
+            block += f"Total statistical trackers attached to this memory: {len(added)}\n"
+            if len(added) > self.max_stats_per_memory:
+                block += f"WARNING: You are tracking {len(added)} stats, exceeding the limit of {self.max_stats_per_memory}! You MUST evict at least {len(added) - self.max_stats_per_memory} stats via `evict_stat_ids`.\n"
+            mem_blocks.append(block)
+            
+        prompt = NEW_MEMORY_FINALIZATION_PROMPT.format(
+            game_rules=game_rules,
+            new_questions="\n\n".join(mem_blocks),
+            max_stats_per_memory=self.max_stats_per_memory
+        )
+        
+        msg = [{"role": "user", "content": prompt}]
+        resp, qry = self.llm_query(msg, n=1, stop=None, prompt_type='move')
+        
+        self._log_prompt("PHASE D: NEW MEMORY FINALIZATION", prompt, resp[0])
+        
+        parsed = extract_json_block(strip_thinking_block(resp[0]))
+        
+        finalized = { upd.get("question"): upd for upd in parsed.get("finalized_memories", []) }
+        
+        for i, m_info in mem_map.items():
+            draft = m_info["draft"]
+            added = m_info["added"]
+            
+            q = draft.get("question")
+            content = ""
+            
+            upd = finalized.get(q)
+            evict_ids = []
+            if upd:
+                if upd.get("update") and upd.get("new_content"):
+                    content = upd["new_content"]
+                evict_ids = upd.get("evict_stat_ids") or []
+                
+            if not content:
+                content = f"Active Tracker: {q}"
+                
+            final_stat_ids = list(dict.fromkeys([s for s in added if s not in evict_ids]))
+                
+            mem_id = f"mem_{uuid.uuid4().hex[:8]}"
+            vec = self.embedder.encode(content, is_query=False)
+            
+            mem_id = self.store.add_memory(
+                key=opponent_key,
+                content=content,
+                vec=vec,
+                stat_ids=final_stat_ids,
+                question=q
+            )
+            for sid in final_stat_ids:
+                self.stat_pool.add_reference(opponent_key, sid, mem_id)
 
     def flush_batch_updates(self, gradient_data: list) -> None:
-        """Called at the end of a parallel batch to accumulate all games and execute LLM updates across the batch."""
-        # 1. Early exit if no data was returned from the batched games.
+        """
+        Main orchestration loop for post-game processing. 
+        Replaces the old serial per-game execution with a batched pipeline:
+        
+        1. Phase A: Extract stat proposals individually for each game.
+        2. Phase B: Batch all proposals across all games and resolve them semantically (inherit/define) in ONE LLM call.
+        3. Phase 1 Loop: Update numerical values of all involved stats based on the game trajectory.
+        4. Phase C: Batched update for textual content of existing memories affected by stat changes or new info requests.
+        5. Phase D: Batched finalization for textual content of newly created memories.
+        6. Strategy Merging (Legacy system).
+        7. Persist the store and stat_pool to disk.
+        """
         if not gradient_data:
             return
             
-        target_key = None
-        all_correction_tasks = []
-        all_synthesis_tasks = []
-        all_new_strategies = []
-        
-        # 2. Iterate through the results of each game played in this parallel batch.
+        # Group gradient data by opponent key
+        grouped_data = {}
         for data in gradient_data:
-            if isinstance(data, dict):
-                target_key = data.get("opponent_key", target_key)
-                q_log = data.get("question_log", [])
-                s_log = data.get("strategy_log", [])
-                gh = data.get("game_history", "")
-                
-                # 3. If the game data is valid, parse the questions (this runs the Review Prompt per-game internally).
-                if target_key and q_log and gh:
-                    # _process_question_log does the game-specific review and returns the structured tasks.
-                    c_tasks, s_tasks = self._process_question_log(target_key, q_log, gh)
-                    # 4. Accumulate these tasks into global batch lists.
-                    all_correction_tasks.extend(c_tasks)
-                    all_synthesis_tasks.extend(s_tasks)
-                    
-                if s_log and gh:
-                    new_s = self._process_strategy_log(s_log, gh)
-                    if new_s:
-                        all_new_strategies.extend(new_s)
-                    
-        # 5. After all games in the batch have been reviewed and their tasks pooled...
-        if target_key:
-            # 6. Execute one giant LLM call to correct ALL flawed memories discovered in this batch.
-            if all_correction_tasks:
-                self._execute_batched_corrections(target_key, all_correction_tasks)
-            # 7. Execute one giant LLM call to synthesize memories for ALL unanswered questions in this batch.
-            if all_synthesis_tasks:
-                self._execute_batched_synthesis(target_key, all_synthesis_tasks)
-                
-        if all_new_strategies:
-            self._merge_new_strategies(all_new_strategies)
-                
-        # 8. Finally, save the updated two-layer database to disk so it's ready for the next batch/epoch.
-        if target_key and self.store_path != '/dev/null':
-            self.store.save(self.store_path)
+            opp_key = data.get("opponent_key")
+            if not opp_key:
+                continue
+            if opp_key not in grouped_data:
+                grouped_data[opp_key] = []
+            grouped_data[opp_key].append(data)
             
-        if self.strategy_store_path != '/dev/null':
+        for target_key, opp_gradient_data in grouped_data.items():
+            all_new_strategies = []
+
+            all_proposed_stats = []
+            per_game_results = {}
+
+            # 0. Score memories based on in-game utility (assessed during chat_step)
+            for game_data in opp_gradient_data:
+                opp_key = game_data.get("opponent_key")
+                q_log = game_data.get("question_log", [])
+                for q_entry in q_log:
+                    d_id = q_entry.get("driving_memory_id")
+                    src_id = q_entry.get("source_memory_id")
+                    answered = q_entry.get("answered", False)
+
+                    if d_id and answered:
+                        self.store.update_score(opp_key, d_id, 1)
+
+                    if src_id and not answered:
+                        self.store.update_score(opp_key, src_id, -1)
+
+            # 1. Phase A Loop (Concurrent)
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(opp_gradient_data)) as executor:
+                future_to_idx = {}
+                for game_idx, game_data in enumerate(opp_gradient_data):
+                    opponent_key = game_data.get("opponent_key")
+
+                    q_log = game_data.get("question_log", [])
+                    gh = game_data.get("game_history", "")
+
+                    # Fetch game rules assigned by main.py
+                    game_rules = getattr(self, 'current_game_intro', "")
+
+                    if target_key and q_log and gh:
+                        future = executor.submit(self._run_phase_a, target_key, q_log, gh, game_rules)
+                        future_to_idx[future] = (game_idx, gh, game_rules)
+
+                for future in concurrent.futures.as_completed(future_to_idx):
+                    game_idx, gh, game_rules = future_to_idx[future]
+                    res = future.result()
+                    per_game_results[game_idx] = {
+                        "stat_proposals": res.stat_proposals,
+                        "gh": gh,
+                        "game_rules": game_rules
+                    }
+
+            # 1.5 Split into new_questions vs desired_infos & Phase A.5 Merge
+            all_raw_new_questions = []
+            global_desired_infos = []
+            for res in per_game_results.values():
+                for p in res["stat_proposals"]:
+                    mem_id = p.get("memory_id")
+                    if mem_id:
+                        mem = self.store.get_memory(target_key, mem_id)
+                        if mem:
+                            global_desired_infos.append({
+                                "memory_id": mem_id,
+                                "desired_additional_info": p.get("desired_info", "Detailed investigation requested."),
+                                "proposed_stats": p.get("proposed_stats", [])
+                            })
+                        else:
+                            # Fallback: if memory_id is unmatched, treat as a new question
+                            all_raw_new_questions.append(p)
+                    else:
+                        all_raw_new_questions.append(p)
+
+            gr = list(per_game_results.values())[0]["game_rules"] if per_game_results else ""
+            merged_new_questions = self._run_phase_a_5_merge(all_raw_new_questions, gr) if all_raw_new_questions else []
+
+            all_proposed_stats = []
+            for q in merged_new_questions:
+                all_proposed_stats.extend(q.get("proposed_stats", []))
+            for d in global_desired_infos:
+                all_proposed_stats.extend(d.get("proposed_stats", []))
+
+            # 2. Phase B
+            resolved_stats_map = self._run_phase_b(target_key, all_proposed_stats, gr)
+            # 3. Phase 1 Loop: Numerical Update (Concurrent)
+            global_changed_stat_info = {}
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, len(per_game_results))) as executor:
+                future_to_res = {}
+                for game_idx, res in per_game_results.items():
+                    gh = res["gh"]
+                    gr = res["game_rules"]
+
+                    # Fetch stats only from memories that were retrieved/driven this round
+                    retrieved_mem_ids = set()
+                    for g_data in opp_gradient_data:
+                        for q_entry in g_data.get("question_log", []):
+                            if q_entry.get("driving_memory_id"):
+                                retrieved_mem_ids.add(q_entry["driving_memory_id"])
+                            if q_entry.get("source_memory_id"):
+                                retrieved_mem_ids.add(q_entry["source_memory_id"])
+                            for m_id in q_entry.get("retrieved_memory_ids", []):
+                                retrieved_mem_ids.add(m_id)
+
+                    existing_stat_ids = []
+                    for m_id in retrieved_mem_ids:
+                        mem = self.store.get_memory(target_key, m_id)
+                        if mem:
+                            existing_stat_ids.extend(mem.get("stat_ids", []))
+                    existing_stat_ids = list(set(existing_stat_ids))
+
+                    # Since all newly resolved stats from Phase B belong to the opponent,
+                    # we pass ALL of them to every game's Phase 1 so they can be updated by all trajectories!
+                    newly_resolved_ids = list(set(resolved_stats_map.values()))
+
+                    # Run numerical update for this specific game concurrently
+                    future = executor.submit(self._run_stat_update, target_key, gh, gr, existing_stat_ids, newly_resolved_ids)
+                    future_to_res[future] = res
+
+                for future in concurrent.futures.as_completed(future_to_res):
+                    res = future_to_res[future]
+                    changed_stat_info = future.result()
+
+                    # Accumulate global changes for the batch
+                    for m_id, s_ids in changed_stat_info.items():
+                        if m_id not in global_changed_stat_info:
+                            global_changed_stat_info[m_id] = []
+                        global_changed_stat_info[m_id].extend(s_ids)
+
+            global_new_mems = merged_new_questions
+
+            # 4. Phase C: Batched Content Update
+            if global_changed_stat_info or global_desired_infos:
+                # Deduplicate stat IDs per memory
+                for m_id in global_changed_stat_info:
+                    global_changed_stat_info[m_id] = list(set(global_changed_stat_info[m_id]))
+
+                self._run_memory_content_update(
+                    target_key,
+                    gr,
+                    global_changed_stat_info,
+                    global_desired_infos,
+                    resolved_stats_map,
+                    all_proposed_stats
+                )
+
+            # 5. Phase D: Batched New Memory Finalization
+            if global_new_mems:
+                self._run_new_memory_finalization(
+                    target_key,
+                    global_new_mems,
+                    resolved_stats_map,
+                    all_proposed_stats,
+                    gr
+                )
+
+            # 5.5. GC: Remove orphaned Phase B stats that were never bound to any memory
+            newly_resolved_ids = list(set(resolved_stats_map.values()))
+            for sid in newly_resolved_ids:
+                if target_key in self.stat_pool.stats and sid in self.stat_pool.stats[target_key]:
+                    refs = self.stat_pool.stats[target_key][sid].get("referenced_by", [])
+                    if len(refs) == 0:
+                        del self.stat_pool.stats[target_key][sid]
+
+            # 6. Legacy Strategy Merging (only when strategy memory is enabled)
+            if self.use_strategy_memory:
+                for game_data in opp_gradient_data:
+                    s_log = game_data.get("strategy_log", [])
+                    gh = game_data.get("game_history", "")
+                    if s_log and gh:
+                        new_s = self._process_strategy_log(s_log, gh)
+                        if new_s:
+                            all_new_strategies.extend(new_s)
+
+                if all_new_strategies:
+                    self._merge_new_strategies(all_new_strategies)
+
+        # 7. Persist
+        self.store.save(self.store_path)
+        self.stat_pool.save(self.stat_pool_path)
+        if self.use_strategy_memory:
             self.strategy_store.save(self.strategy_store_path)

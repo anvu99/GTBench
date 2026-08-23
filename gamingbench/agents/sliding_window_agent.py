@@ -51,10 +51,17 @@ class SlidingWindowAgent(PromptAgent):
     def _build_prompts(self, observations):
         system_prompt, observation_prompt = super()._build_prompts(observations)
         
-        env_name = observations['env_name']
+        obs_env = observations['env_name']
+        env_name = getattr(self, 'current_game_name', obs_env)
+        if not env_name or env_name == 'unknown':
+            env_name = obs_env
+            
         self.current_game_name = env_name
         
         current_notes = self.sw_store.get(env_name)
+        if not current_notes and obs_env != env_name:
+            current_notes = self.sw_store.get(obs_env)
+            
         if current_notes:
             sw_injection = SW_INJECTION_PROMPT.format(
                 game_name=env_name,

@@ -75,13 +75,14 @@ class Hanabi:
                         if hasattr(agent, 'agent_name') and hasattr(opponent_agent, 'agent_name') and agent.agent_name == opponent_agent.agent_name:
                             opponent_name = opponent_agent.agent_name
                         else:
-                            opponent_name = f"Player {opponent_idx}"
+                            opponent_name = f"{opponent_agent.agent_name}" if len(agent_list) > 1 else "unknown"
                         agent.reset_game_state(opponent_name, game_intro)
                     else:
                         opponent_keys = []
                         for j in range(self.num_players):
                             if i != j:
-                                opponent_keys.append(f"Player {j}")
+                                opponent_agent = agent_list[j]
+                                opponent_keys.append(f"{opponent_agent.agent_name}")
                         # Sort to avoid seat-based fragmentation
                         agent.reset_game_state("+".join(sorted(opponent_keys)), game_intro)
                 agent.current_player_index = i
@@ -115,14 +116,14 @@ class Hanabi:
             
             # Parse action
             legal_moves_raw = player_obs['legal_moves']
-            action_dict = self._parse_action(action_str, legal_moves_raw, logical_idx, seat_idx, seat_mapping)
+            action_dict = self._parse_action(action_str, legal_moves_raw, logical_idx, seat_idx, seat_mapping, agent_list, model_list)
             
             if action_dict is None:
                 self.logger.warning(f"Unsuccessful interpreting LLM move: {action_str}. Falling back to first legal move.")
                 if not legal_moves_raw:
                     break
                 action_dict = legal_moves_raw[0]
-                action_str = self._action_dict_to_str(action_dict, logical_idx, seat_idx, seat_mapping)
+                action_str = self._action_dict_to_str(action_dict, logical_idx, seat_idx, seat_mapping, agent_list, model_list)
             
             self.logger.info(f"player: {logical_idx} agent:{agent_list[logical_idx].agent_name}, action: {action_str}")
             self.logger.info(f"game_action:{action_str}")
@@ -192,7 +193,7 @@ class Hanabi:
 
     def _build_obs_dict(self, obs, player_obs, seat_idx, logical_idx, agent_list, model_list, seat_mapping, round_num=None, hint_rounds=None):
         # Human readable legal moves
-        legal_moves_str = [self._action_dict_to_str(a, logical_idx, seat_idx, seat_mapping) for a in player_obs['legal_moves']]
+        legal_moves_str = [self._action_dict_to_str(a, logical_idx, seat_idx, seat_mapping, agent_list, model_list) for a in player_obs['legal_moves']]
         
         # Format fireworks
         fireworks = player_obs['fireworks']
@@ -224,7 +225,10 @@ class Hanabi:
                 
                 draw_round = self.card_draw_rounds[actual_seat][c_idx]
                 formatted_hand.append(f"{card['color']}{card['rank'] + 1} (Drawn Round {draw_round}) [{hint_str}]")
-            other_hands[actual_logical] = formatted_hand
+            
+            agent = agent_list[actual_logical] if agent_list and len(agent_list) > actual_logical else None
+            name = f"{agent.agent_name}" if agent and hasattr(agent, 'agent_name') and model_list else f"Player {actual_logical}"
+            other_hands[name] = formatted_hand
             
         # Own hand knowledge
         own_knowledge = []
@@ -248,11 +252,18 @@ class Hanabi:
         
         hint_histories = {}
         for s in range(self.num_players):
-            hint_histories[seat_mapping[s]] = self.player_hint_history[s]
+            s_logical = seat_mapping[s]
+            agent = agent_list[s_logical] if agent_list and len(agent_list) > s_logical else None
+            name = f"{agent.agent_name}" if agent and hasattr(agent, 'agent_name') and model_list else f"Player {s_logical}"
+            hint_histories[name] = self.player_hint_history[s]
+        
+        agent = agent_list[logical_idx] if agent_list and len(agent_list) > logical_idx else None
+        player_name = f"{agent.agent_name}" if agent and hasattr(agent, 'agent_name') and model_list else f"Player {logical_idx}"
         
         return {
             'env_name': self.game_name,
             'player_idx': logical_idx,
+            'player_name': player_name,
             'num_players': self.num_players,
             'round_num': round_num,
             'fireworks': fireworks,
@@ -268,15 +279,21 @@ class Hanabi:
             'board': board_str
         }
 
-    def _parse_action(self, action_str, legal_moves_raw, logical_idx, seat_idx, seat_mapping):
+    def _parse_action(self, action_str, legal_moves_raw, logical_idx, seat_idx, seat_mapping, agent_list=None, model_list=None):
         if not action_str:
             return None
             
         # Clean < > 
-        action_str = action_str.replace('<', '').replace('>', '').strip()
+        action_str_clean = action_str.replace('<', '').replace('>', '').strip()
         
-        # Convert to action dict
-        parts = action_str.split(' ')
+        # Verify it's legal by directly comparing strings first
+        for legal_move in legal_moves_raw:
+            legal_str = self._action_dict_to_str(legal_move, logical_idx, seat_idx, seat_mapping, agent_list, model_list)
+            if action_str.strip() == legal_str or action_str_clean == legal_str.replace('<', '').replace('>', ''):
+                return legal_move
+
+        # Fallback to parts parsing
+        parts = action_str_clean.split(' ')
         if len(parts) == 0:
             return None
             
@@ -286,21 +303,15 @@ class Hanabi:
             if action_type in ['PLAY', 'DISCARD'] and len(parts) >= 2:
                 idx = int(parts[1])
                 candidate = {'action_type': action_type, 'card_index': idx}
-            elif action_type == 'HINT' and len(parts) >= 4:
-                # format: HINT PLAYER N COLOR Color
-                target_logical = int(parts[2])
-                target_seat = seat_mapping.index(target_logical)
-                target_offset = (target_seat - seat_idx + self.num_players) % self.num_players
-                hint_type = parts[3].upper()
-                
-                if hint_type == 'COLOR' and len(parts) >= 5:
-                    color = parts[4].upper()[0] # R, Y, G, W, B
-                    candidate = {'action_type': 'REVEAL_COLOR', 'target_offset': target_offset, 'color': color}
-                elif hint_type == 'RANK' and len(parts) >= 5:
-                    rank = int(parts[4]) - 1
-                    candidate = {'action_type': 'REVEAL_RANK', 'target_offset': target_offset, 'rank': rank}
-                else:
-                    return None
+            elif action_type == 'HINT':
+                # Try to find a legal hint action that matches the color or rank in the string
+                for legal_move in legal_moves_raw:
+                    if legal_move['action_type'] not in ['REVEAL_COLOR', 'REVEAL_RANK']:
+                        continue
+                    legal_str = self._action_dict_to_str(legal_move, logical_idx, seat_idx, seat_mapping, agent_list, model_list).replace('<', '').replace('>', '')
+                    if legal_str in action_str_clean:
+                        return legal_move
+                return None
             else:
                 return None
         except ValueError:
@@ -318,18 +329,23 @@ class Hanabi:
                 
         return None
 
-    def _action_dict_to_str(self, action_dict, logical_idx, seat_idx, seat_mapping):
+    def _action_dict_to_str(self, action_dict, logical_idx, seat_idx, seat_mapping, agent_list=None, model_list=None):
         atype = action_dict['action_type']
         if atype in ['PLAY', 'DISCARD']:
             return f"<{atype} {action_dict['card_index']}>"
-        elif atype == 'REVEAL_COLOR':
+        elif atype in ['REVEAL_COLOR', 'REVEAL_RANK']:
             target_seat = (seat_idx + action_dict['target_offset']) % self.num_players
             player = seat_mapping[target_seat]
-            return f"<HINT PLAYER {player} COLOR {action_dict['color']}>"
-        elif atype == 'REVEAL_RANK':
-            target_seat = (seat_idx + action_dict['target_offset']) % self.num_players
-            player = seat_mapping[target_seat]
-            return f"<HINT PLAYER {player} RANK {action_dict['rank'] + 1}>"
+            if agent_list and model_list:
+                agent = agent_list[player]
+                name = f"{agent.agent_name}" if hasattr(agent, 'agent_name') else f"Player {player}"
+            else:
+                name = f"PLAYER {player}"
+                
+            if atype == 'REVEAL_COLOR':
+                return f"<HINT {name} COLOR {action_dict['color']}>"
+            else:
+                return f"<HINT {name} RANK {action_dict['rank'] + 1}>"
         return "<UNKNOWN>"
 
     def _get_state_snapshot_str_full(self, obs, seat_idx, logical_idx, agent_list, model_list, seat_mapping, round_num=None, hint_rounds=None):
@@ -370,7 +386,12 @@ class Hanabi:
                 hand_parts.append(f"{card_str} (Drawn Round {draw_round}) [{hint_str}]")
                 
             l_idx = seat_mapping[s]
-            prefix = f"Player {l_idx} (acting)" if s == seat_idx else f"Player {l_idx}"
+            agent = agent_list[l_idx] if agent_list and len(agent_list) > l_idx else None
+            if agent and hasattr(agent, 'agent_name') and model_list:
+                name = f"{agent.agent_name}"
+            else:
+                name = f"Player {l_idx}"
+            prefix = f"{name} (acting)" if s == seat_idx else f"{name}"
             hands_str.append(f"{prefix}: " + ", ".join(hand_parts))
             
         return base_state + "\n    [Hands] " + " | ".join(hands_str)
@@ -389,7 +410,12 @@ class Hanabi:
             # Find which cards matched
             target_seat = (seat_idx + action_dict['target_offset']) % self.num_players
             target_logical = seat_mapping[target_seat]
-            return f"Hint given to Player {target_logical}."
+            agent = agent_list[target_logical] if agent_list and len(agent_list) > target_logical else None
+            if agent and hasattr(agent, 'agent_name') and model_list:
+                name = f"{agent.agent_name}"
+            else:
+                name = f"Player {target_logical}"
+            return f"Hint given to {name}."
         return ""
 
     def _generate_game_history(self, final_score, agent_list, model_list):
@@ -398,14 +424,25 @@ class Hanabi:
         
         teammates = []
         for i in range(len(agent_list)):
-            teammates.append(f"Player {i}")
+            agent = agent_list[i]
+            if hasattr(agent, 'agent_name') and model_list:
+                name = f"{agent.agent_name}"
+            else:
+                name = f"Player {i}"
+            teammates.append(f"{name}")
         history.append(f"[Teammates]: {', '.join(teammates)}")
+        history.append("Note: For HINT actions, use the exact target teammate name listed above to target the specific player.")
         history.append("")
         
         for i, (logical_idx, action_str, outcome_str, state_snapshot) in enumerate(self._move_log):
             history.append(f"Round {i+1}:")
             history.append(f"  [State] {state_snapshot}")
-            history.append(f"  [Move] Player {logical_idx}: {action_str}  -> {outcome_str}")
+            agent = agent_list[logical_idx] if agent_list and len(agent_list) > logical_idx else None
+            if agent and hasattr(agent, 'agent_name') and model_list:
+                name = f"{agent.agent_name}"
+            else:
+                name = f"Player {logical_idx}"
+            history.append(f"  [Move] {name}: {action_str}  -> {outcome_str}")
             history.append("")
             
         history.append(f"Game Outcome: Cooperative final score = {final_score}.")

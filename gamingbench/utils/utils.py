@@ -271,3 +271,10 @@ def query_with_thinking_validation(model, messages, stop=None, prompt_type='move
         return ""
         
     return raw_generation
+
+def truncate_game_history(history_str: str, max_chars: int = 8000) -> str:
+    """Truncate the middle of a game history if it exceeds max_chars to prevent context window limits."""
+    if len(history_str) <= max_chars:
+        return history_str
+    half = max_chars // 2
+    return history_str[:half] + "\n\n...[TRUNCATED MIDDLE TO SAVE CONTEXT]...\n\n" + history_str[-half:]

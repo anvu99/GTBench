@@ -1,5 +1,5 @@
 agent_name: EpisodicWindowAgent
 num_generations: 1
 majority_vote: False
-window_size: 10
+window_size: 6
 ew_store_path: ew_store.json

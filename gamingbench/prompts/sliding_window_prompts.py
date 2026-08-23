@@ -1,13 +1,12 @@
 SW_INJECTION_PROMPT = """\
-=== YOUR GAME NOTES ===
-From your experience in previous games of {game_name}, you have written these notes to guide your future play.
+=== OPPONENT REPUTATION NOTE ===
+From your experience in previous games of {game_name}, you have built up this note about your opponent. It captures insights about their behavioral tendencies, patterns, and hidden intent to help you anticipate their moves and make better decisions.
 
---- GAME NOTES ---
+--- OPPONENT REPUTATION NOTE ---
 {notes_text}
 
-Use these notes to inform your current move decisions.
-=== END GAME NOTES ===
-"""
+Use this note to inform your current move decisions.
+=== END OPPONENT REPUTATION NOTE ==="""
 
 SW_UPDATE_PROMPT = """\
 You are reviewing your own experience in {game_name}.
@@ -15,7 +14,7 @@ You are reviewing your own experience in {game_name}.
 --- GAME RULES ---
 {game_intro}
 
---- YOUR CURRENT GAME NOTES ---
+--- YOUR CURRENT OPPONENT REPUTATION NOTE ---
 {old_notes}
 
 --- GAME HISTORIES FROM LATEST BATCH ({n} games) ---
@@ -28,6 +27,6 @@ Each game history below uses the same full Match Ground Truth format:
 
 {game_histories}
 
-Based on these {n} recent games and your existing notes, write an updated, general summary of your experience in this game.
-These notes will be provided to you in future games to guide your strategy.
+Based on these {n} recent games, write an updated Opponent Reputation Note.
+This note should store insights you have perceived about the opponent — their behavioral tendencies, patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
 """

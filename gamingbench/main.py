@@ -9,7 +9,7 @@ from gamingbench.utils import utils
 from gamingbench.environments.base_env import BaseGameEnv
 import json
 
-games = ['tictactoe', 'connect4', 'texasholdem', 'neuron_poker', 'backgammon', 'breakthrough',
+games = ['tictactoe', 'connect4', 'texas_holdem', 'texasholdem', 'neuron_poker', 'backgammon', 'breakthrough',
          'first_sealed_auction', 'gin_rummy', 'liars_dice', 'negotiation', 'nim', 'pig', 'kuhn_poker',
          'prisoners_dilemma', 'cooperative_negotiation', 'hanabi', 'hanabi-micro', 'hanabi-small', 'hanabi3-micro', 'hanabi-small-custom']
 
@@ -49,6 +49,8 @@ def get_args():
     parser.add_argument('--n-player-memory-mode', type=str, default='combined', choices=['combined', 'separate'], help='Memory mode for N-player cooperative games')
     parser.add_argument('--batch-size', type=int, default=1,
                         help='Number of games per LTM update batch. Default 1 = update after every game (existing behaviour).')
+    parser.add_argument('--use-strategy-memory', default=False, action='store_true',
+                        help='Enable strategy memory for ProactiveQueryAgent. When absent, only the proactive query store is used.')
     args = parser.parse_args()
 
     return args
@@ -226,9 +228,12 @@ def run_game(game_name):
         m.nick_name = f"Player {i+1}"
         a.set_model(m)
         a.player_id = f"p{i}"
+        a.current_game_name = game_name.lower()
         a.enable_chat = getattr(args, 'enable_chat', False)
         a.think_further = getattr(args, 'think_further', False)
         a.memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
+        if hasattr(a, 'use_strategy_memory'):
+            a.use_strategy_memory = getattr(args, 'use_strategy_memory', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -251,6 +256,22 @@ def run_game(game_name):
         game_env.append_models_config(utils.load_config(config_path))
 
     game_env.set_game(game)
+
+    pregenerated_chance_actions = []
+    if getattr(args, 'exchange_first_player', False) and game_name in ['liars_dice', 'first_sealed_auction']:
+        for match_idx in range(args.num_matches):
+            if match_idx % 2 == 1:
+                pregenerated_chance_actions.append(list(pregenerated_chance_actions[-1]))
+            else:
+                game.reset()
+                actions = []
+                while game.env.is_chance_node():
+                    outcomes = game.env.chance_outcomes()
+                    action_list, prob_list = zip(*outcomes)
+                    action = game._sample_chance_action(action_list, prob_list)
+                    actions.append(action)
+                    game.env.apply_action(action)
+                pregenerated_chance_actions.append(actions)
 
     lock = threading.Lock()
     batch_size = getattr(args, 'batch_size', 1)
@@ -316,6 +337,7 @@ def run_game(game_name):
                     'args': args,
                     'lock': lock,
                     'batch_queue': batch_q,
+                    'forced_chance_actions': list(pregenerated_chance_actions[match_idx]) if pregenerated_chance_actions else []
                 })
 
             # Run all N games in the batch in parallel; blocks until all complete
@@ -380,7 +402,8 @@ def run_game(game_name):
                 'models': match_models,
                 'result_path': result_path,
                 'args': args,
-                'lock': lock
+                'lock': lock,
+                'forced_chance_actions': list(pregenerated_chance_actions[match_idx]) if pregenerated_chance_actions else []
             }
             results.append(run_match(match_arg))
     else:
@@ -400,7 +423,8 @@ def run_game(game_name):
                 'agents': match_agents,
                 'result_path': result_path,
                 'args': args,
-                'lock': lock
+                'lock': lock,
+                'forced_chance_actions': list(pregenerated_chance_actions[match_idx]) if pregenerated_chance_actions else []
             })
         results = utils.parallel_func(run_match, match_arg_list,
                                       num_workers=args.num_workers)
@@ -433,9 +457,15 @@ def run_match(params):
     result_path = params['result_path']
 
     args = params['args']
+    forced_chance_actions = params.get('forced_chance_actions', [])
+    
     game_env = BaseGameEnv()
     game = utils.load_game(os.path.join(
         args.game_config_root, f'{game_name}.yaml'))
+    
+    # inject the forced chance actions into the game
+    game.forced_chance_actions = list(forced_chance_actions)
+
     game_env.save_game_config(utils.load_config(
         os.path.join(args.game_config_root, f'{game_name}.yaml')))
 
@@ -493,9 +523,14 @@ def run_match_nplayer(params):
     lock = params['lock']
     args = params['args']
     log_root = params['log_root']
+    forced_chance_actions = params.get('forced_chance_actions', [])
 
     game_env = BaseGameEnv()
     game = utils.load_game(os.path.join(args.game_config_root, f'{game_name}.yaml'))
+    
+    # inject the forced chance actions into the game
+    game.forced_chance_actions = list(forced_chance_actions)
+
     game_env.save_game_config(utils.load_config(os.path.join(args.game_config_root, f'{game_name}.yaml')))
 
     agents = params['agents']
@@ -623,9 +658,12 @@ def run_game_nplayer(game_name):
         m.nick_name = f"Player {i+1}"
         a.set_model(m)
         a.player_id = f"p{i}"
+        a.current_game_name = game_name.lower()
         a.enable_chat = getattr(args, 'enable_chat', False)
         a.think_further = getattr(args, 'think_further', False)
         a.memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
+        if hasattr(a, 'use_strategy_memory'):
+            a.use_strategy_memory = getattr(args, 'use_strategy_memory', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -833,5 +871,4 @@ def main(args):
 
 if __name__ == '__main__':
     args = get_args()
-    for g in args.game_names:
-        run_game(g)
+    main(args)

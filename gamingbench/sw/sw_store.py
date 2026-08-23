@@ -18,8 +18,12 @@ class SlidingWindowStore:
     def save(self, filepath: str) -> None:
         """Serializes the SW store to a JSON file."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        with open(filepath, "w") as f:
+        tmp_filepath = filepath + ".tmp"
+        with open(tmp_filepath, "w") as f:
             json.dump({"notes": self.store}, f, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(tmp_filepath, filepath)
 
     def load(self, filepath: str) -> None:
         """Deserializes the SW store from a JSON file."""

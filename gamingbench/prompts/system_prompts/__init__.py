@@ -11,6 +11,7 @@ from gamingbench.prompts.system_prompts import kuhn_poker
 from gamingbench.prompts.system_prompts import prisoners_dilemma
 from gamingbench.prompts.system_prompts import cooperative_negotiation
 from gamingbench.prompts.system_prompts import hanabi
+from gamingbench.prompts.system_prompts import texas_holdem
 
 # maps
 mapping = {
@@ -24,7 +25,8 @@ mapping = {
     'pig': pig,
     'python_iterated_prisoners_dilemma': prisoners_dilemma,
     'cooperative_negotiation': cooperative_negotiation,
-    'hanabi': hanabi
+    'hanabi': hanabi,
+    'texas_holdem': texas_holdem
 }
 
 

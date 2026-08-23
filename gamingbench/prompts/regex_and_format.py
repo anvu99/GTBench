@@ -7,11 +7,11 @@ def get_step_env_regex_and_format(env_name, turn_type=None):
     elif env_name == 'connect4':
         regex = '(<C[1-7]>|Column.{0,3}[1-7]|column.{0,3}[1-7])'
         format = '<Cx>, e.g., <C1>, <C7>'
-    elif env_name == 'TexasHoldem':
-        regex = '<.+>'
-        format = '<ALL IN>'
+    elif env_name == 'texas_holdem':
+        regex = r"{\s*'action'\s*:\s*'(\w+)'\s*}"
+        format = "{'action': 'move_name'} e.g., {'action': 'call'}, {'action': 'raise'}, {'action': 'fold'}"
     elif env_name == 'breakthrough':
-        regex = '[a-c][1-8]->[a-c][1-8](?:\*)?'
+        regex = r'[a-c][1-8]->[a-c][1-8](?:\*)?'
         format = '<[a-c][1-8]->[a-c][1-8]>, e.g., <a7->a6>'
     elif env_name == 'pig':
         regex = '(.+)'
@@ -24,13 +24,13 @@ def get_step_env_regex_and_format(env_name, turn_type=None):
         format = '<pile:x, take:y>, e.g., <pile:1, take:1>, <pile:4, take:7>'
     elif env_name in ['negotiation', 'cooperative_negotiation']:
         if turn_type == 'Utterance':
-            regex = '(<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
+            regex = r'(<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
             format = '<Utterance: [a, b, c]> e.g., <Utterance: [4, 2, 1]>'
         elif turn_type == 'Proposal':
-            regex = '(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
+            regex = r'(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
             format = '<Proposal: [a, b, c]> e.g., <Proposal: [1, 2, 3]> or <agree>'
         else:
-            regex = '(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>|<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
+            regex = r'(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>|<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
             format = '<Proposal|Utterance: [a, b, c]> e.g., <Proposal: [1, 2, 3]> <Utterance: [4, 2, 1]> or <agree>'
     elif env_name == 'first_sealed_auction':
         # Allow optional decimals in case the LLM hallucinates a float bid like <0.5>
@@ -43,8 +43,8 @@ def get_step_env_regex_and_format(env_name, turn_type=None):
         regex = '(<Testify>|<Silent>)'
         format = '<Testify|Silent>, e.g., <Testify>, <Silent>'
     elif env_name == 'hanabi':
-        regex = r'(<(?:PLAY|DISCARD) \d+>|<HINT PLAYER \d+ (?:COLOR [A-Za-z]+|RANK \d+)>)'
-        format = '<PLAY N>, <DISCARD N>, <HINT PLAYER N COLOR Color>, or <HINT PLAYER N RANK N>'
+        regex = r'(<(?:PLAY|DISCARD) \d+>|<HINT .+? (?:COLOR [A-Za-z]+|RANK \d+)>)'
+        format = '<PLAY N>, <DISCARD N>, <HINT NAME COLOR Color>, or <HINT NAME RANK N>'
     else:
         raise NotImplementedError
     return regex, format

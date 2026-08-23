@@ -14,7 +14,7 @@ class EpisodicWindowAgent(PromptAgent):
 
     def __init__(self, config, **kwargs):
         super(EpisodicWindowAgent, self).__init__(config, **kwargs)
-        self.window_size = getattr(config, 'window_size', 10)
+        self.window_size = getattr(config, 'window_size', 4)
         self.ew_store_path = getattr(self, "ew_store_path", "ew_store.json")
         self.hive_mode = getattr(config, 'hive_mode', False)
         self.ew_store = EpisodicWindowStore()
@@ -127,45 +127,20 @@ class EpisodicWindowAgent(PromptAgent):
             
         from gamingbench.utils.utils import strip_thinking_block
         
-        # 1. Process each game history to generate a short observation
+        # 1. Store each game history directly as the trajectory
         for i, game_history in enumerate(game_histories):
-            obs_prompt = EW_ENDGAME_OBS_PROMPT.format(
-                game_name=env_name,
-                game_intro=game_intro,
-                game_history=game_history
-            )
-            messages = [{"role": "user", "content": obs_prompt}]
-            try:
-                thinking_enabled = getattr(self.model, 'enable_thinking', False)
-                retries = 0
-                while True:
-                    generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-                    raw_gen = generations[0]
-                    has_tag = any(tag in raw_gen for tag in ["<think>", "</think>", "<thought>", "</thought>"])
-                    if not thinking_enabled or has_tag or retries >= 2:
-                        break
-                    retries += 1
-                    self.logger.warning(f"Missing thinking tag in EW endgame observation, retrying ({retries}/2)...")
-                    
-                if thinking_enabled and not has_tag:
-                    self.logger.error("Failed to generate thinking tags for EW observation after retries.")
-                    observation = "Game observation generation failed."
-                else:
-                    observation = strip_thinking_block(raw_gen).strip()
-                    
-                self.ew_store.add_observation(env_name, observation, self.window_size)
-                self.logger.info(f'Game {i+1}/{n} Observation:\n{observation}')
-            except Exception as e:
-                self.logger.error(f"Failed to generate EW observation for game {i+1}: {e}")
+            self.ew_store.add_observation(env_name, game_history, self.window_size)
+            self.logger.info(f'Game {i+1}/{n} Trajectory Stored (Length: {len(game_history)})')
                 
-        # 2. Synthesize all observations in the window into new notes
+        # 2. Synthesize all trajectories in the window into new notes
         observations_list = self.ew_store.get_observations(env_name)
         if observations_list:
+            from gamingbench.utils.utils import truncate_game_history
             formatted_observations = ""
             for i, obs in enumerate(observations_list):
                 # Reverse order so the most recent is clearly marked? Or just chronological.
                 # Chronological: 1 is oldest in window, len is newest.
-                formatted_observations += f"=== Game Observation {i + 1} ===\n{obs}\n\n"
+                formatted_observations += f"=== Game Trajectory {i + 1} ===\n{obs}\n\n"
                 
             synthesis_prompt = EW_WINDOW_SYNTHESIS_PROMPT.format(
                 game_name=env_name,
@@ -201,8 +176,8 @@ class EpisodicWindowAgent(PromptAgent):
             # Trace log
             log_file = self.ew_store_path.replace('.json', '_trace.log')
             with open(log_file, 'a') as f:
-                f.write(f'=== BATCH FLUSH (N={n} games, Window={len(observations_list)} obs) EW UPDATE ===\n')
-                f.write(f"OBSERVATIONS COLLECTED:\n{formatted_observations}\n")
+                f.write(f'=== BATCH FLUSH (N={n} games, Window={len(observations_list)} trajectories) EW UPDATE ===\n')
+                f.write(f"TRAJECTORIES COLLECTED:\n{formatted_observations}\n")
                 f.write(f"SYNTHESIS PROMPT:\n{synthesis_prompt}\n")
                 f.write(f'SYNTHESIZED NOTES:\n{new_notes}\n')
                 f.write('=' * 50 + '\n\n')

@@ -11,6 +11,7 @@ from gamingbench.prompts.observation_prompts import kuhn_poker
 from gamingbench.prompts.observation_prompts import prisoners_dilemma
 from gamingbench.prompts.observation_prompts import cooperative_negotiation
 from gamingbench.prompts.observation_prompts import hanabi
+from gamingbench.prompts.observation_prompts import texas_holdem
 
 # maps
 mapping = {
@@ -30,7 +31,8 @@ mapping = {
     'hanabi-micro': hanabi,
     'hanabi-small': hanabi,
     'hanabi-small-custom': hanabi,
-    'hanabi3-micro': hanabi
+    'hanabi3-micro': hanabi,
+    'texas_holdem': texas_holdem
 }
 
 def construct_observation_prompt(observations, environment_name):

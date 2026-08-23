@@ -13,7 +13,7 @@ def construct_step_prompt(observation):
 Your output must be in the following format:
 
 Action:
-Your action wrapped with <>, {format}
+{format}
 
 Please return your answer without explanation!
 """

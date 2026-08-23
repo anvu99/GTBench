@@ -93,10 +93,12 @@ def construct_observation_prompt(observations):
                  f"Tokens -> Life: {observations['life_tokens']} | Info: {observations['info_tokens']}\n" \
                  f"Deck size: {observations['deck_size']} | Discard pile: {', '.join(observations['discard_pile'])}\n"
                  
-    own_hand_str = f"--- Your Hand (Player {player_idx}) ---\n"
-    own_hand_str += f"CRITICAL REMINDER: You are Player {player_idx}. You CANNOT see your own cards, only the hints you have received.\n"
+    player_name = observations.get('player_name', f"Player {player_idx}")
     
-    own_hist = observations.get('hint_histories', {}).get(player_idx, [])
+    own_hand_str = f"--- Your Hand ({player_name}) ---\n"
+    own_hand_str += f"CRITICAL REMINDER: You are {player_name}. You CANNOT see your own cards, only the hints you have received.\n"
+    
+    own_hist = observations.get('hint_histories', {}).get(player_name, [])
     if own_hist:
         own_hand_str += f"Timeline of hints you received: {', '.join(own_hist)}\n"
     else:
@@ -107,9 +109,9 @@ def construct_observation_prompt(observations):
         
     other_hands_str = "--- Teammates' Hands (Visible to you) ---\n"
     other_hands_str += "CRITICAL REMINDER: These are your teammates' actual cards. YOUR TEAMMATES CANNOT SEE THESE CARDS (meaning they CANNOT see the color or number/rank of these cards)! They ONLY know the information listed in the [hints: ...] brackets.\n"
-    for p_idx, hand in observations['other_hands'].items():
-        other_hands_str += f"Player {p_idx}:\n"
-        other_hist = observations.get('hint_histories', {}).get(p_idx, [])
+    for p_name, hand in observations['other_hands'].items():
+        other_hands_str += f"{p_name}:\n"
+        other_hist = observations.get('hint_histories', {}).get(p_name, [])
         other_hands_str += f"Timeline of hints they received: {', '.join(other_hist) if other_hist else 'None'}\n"
         for i, card_str in enumerate(hand):
             other_hands_str += f"Card {i}: {card_str}\n"
@@ -117,7 +119,7 @@ def construct_observation_prompt(observations):
     legal_moves = observations['legal_moves']
     legal_str = "\n".join(legal_moves)
     
-    prompt = f"You are playing as Player {player_idx} of {num_players}.\n\n" + \
+    prompt = f"You are playing as {player_name} out of {num_players} players.\n\n" + \
              status_str + "\n" + own_hand_str + "\n" + other_hands_str + \
              "\n--- Legal Actions ---\n" + legal_str
              
@@ -127,6 +129,6 @@ def _construct_game_history_legend():
     return """\
 - [State]: A snapshot of the fireworks score, life tokens, info tokens, and deck size at the start of the round.
 - [Hands]: The cards held by each player at that moment, along with the hints they had received about them. NOTE: The hand of the player whose turn it is (marked "acting") is intentionally hidden as 'Unknown' to reflect what they could see at that moment—they only know the information in the [hints: ...] brackets! Hints include an "@ Round X" tag to indicate the exact round (turn) they were received.
-- [Move]: The action taken by the player. <PLAY N> plays the Nth card, <DISCARD N> discards it. <HINT PLAYER N COLOR/RANK> reveals matching cards in that player's hand.
+- [Move]: The action taken by the player. <PLAY N> plays the Nth card, <DISCARD N> discards it. <HINT NAME COLOR/RANK> reveals matching cards in that player's hand.
 - [Outcome]: Whether a PLAY was SUCCESS (added to fireworks) or FAIL (lost a life token), and the token impacts of DISCARD or HINT.\
 """

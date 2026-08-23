@@ -95,8 +95,16 @@ class TwoLayerStore:
                 return mem
         return None
 
-    def add_memory(self, key: str, content: str, evidence_ids: List[str], vec: np.ndarray, max_evidence_per_memory: int = 6, question: str = None) -> str:
-        """Creates a new Level 2 memory, seeded by the provided list of evidence IDs."""
+    def add_memory(self, key: str, content: str, evidence_ids: List[str] = None, vec: np.ndarray = None, stat_ids: List[str] = None, max_evidence_per_memory: int = 6, question: str = None) -> str:
+        """Adds a new memory to Level 2. Overwrites entirely."""
+        if evidence_ids is None:
+            evidence_ids = []
+        if stat_ids is None:
+            stat_ids = []
+            
+        # Ensure stat_ids are unique (deduplication)
+        stat_ids = list(dict.fromkeys(stat_ids))
+
         # Initialize the memory list for this opponent if this is their first memory
         if key not in self.memories:
             self.memories[key] = []
@@ -113,6 +121,7 @@ class TwoLayerStore:
             "id": memory_id,
             "content": content,
             "evidence_ids": evidence_ids,
+            "stat_ids": stat_ids,
             "created_at": time.time(),
             "updated_at": time.time(),
             "generation": 1,
@@ -122,12 +131,15 @@ class TwoLayerStore:
         })
         return memory_id
 
-    def update_memory(self, key: str, memory_id: str, new_content: str, new_evidence_ids: List[str], vec: np.ndarray, max_evidence_per_memory: int = 6, question: str = None) -> bool:
-        """Updates an existing Level 2 memory, appending new evidence while enforcing the FIFO limit."""
+    def update_memory(self, key: str, memory_id: str, new_content: str, new_evidence_ids: List[str] = None, vec: np.ndarray = None, stat_ids: List[str] = None, max_evidence_per_memory: int = 6, question: str = None) -> bool:
+        """Updates an existing Level 2 memory, appending new evidence and replacing stat_ids."""
         # Find the memory to update
         mem = self.get_memory(key, memory_id)
         if not mem:
             return False # Return False if the memory doesn't exist
+            
+        if new_evidence_ids is None:
+            new_evidence_ids = []
             
         # Overwrite the old content with the new, LLM-generated updated content
         mem["content"] = new_content
@@ -135,9 +147,14 @@ class TwoLayerStore:
         # Optionally overwrite the question if one is provided
         if question is not None:
             mem["question"] = question
+            
+        # Overwrite stat_ids if provided
+        if stat_ids is not None:
+            mem["stat_ids"] = stat_ids
         
         # Combine the old evidence IDs with the newly appended ones
-        combined_ev = mem["evidence_ids"] + new_evidence_ids
+        existing_ev = mem.get("evidence_ids", [])
+        combined_ev = existing_ev + new_evidence_ids
         
         # Deduplicate the evidence IDs while preserving their most recent chronological order.
         # If an old evidence ID is re-added, this moves it to the back (newest position)
@@ -204,6 +221,29 @@ class TwoLayerStore:
         valid_mems = [m for m in memories if m.get("question")]
         valid_mems.sort(key=lambda m: m.get("score", 0), reverse=True)
         return valid_mems[:top_k]
+
+    def get_mixed_top_k(self, key: str, top_score_k: int = 7, top_recent_k: int = 3) -> List[Dict[str, Any]]:
+        """Returns top_score_k memories by score, plus top_recent_k memories by recency."""
+        memories = self.get_memories(key)
+        if not memories:
+            return []
+            
+        # Filter out memories that don't have a question
+        valid_mems = [m for m in memories if m.get("question")]
+        
+        # Sort by score descending
+        valid_mems.sort(key=lambda m: m.get("score", 0), reverse=True)
+        top_by_score = valid_mems[:top_score_k]
+        
+        # Remaining memories
+        picked_ids = {m['id'] for m in top_by_score}
+        remaining = [m for m in valid_mems if m['id'] not in picked_ids]
+        
+        # Sort remaining by created_at descending (newest first)
+        remaining.sort(key=lambda m: m.get("created_at", 0), reverse=True)
+        top_by_recent = remaining[:top_recent_k]
+        
+        return top_by_score + top_by_recent
 
     def save(self, filepath: str) -> None:
         """Serializes the dual-layer store to a JSON file."""
