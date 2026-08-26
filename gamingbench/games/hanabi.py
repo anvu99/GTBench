@@ -35,10 +35,22 @@ class Hanabi:
         self.status = "Normal"
         self._move_log = []
 
-    def _create_env(self):
+    def _create_env(self, seed=None):
+        """Create a Hanabi environment. Pass seed for a deterministic card deal."""
+        # seed=-1 means random in the C++ pyhanabi backend; any non-negative int
+        # is used directly as the RNG seed, guaranteeing the same deal every time.
+        seed_val = int(seed) if seed is not None else -1
+
         if self.variant in ["Hanabi-Full", "Hanabi-Full-CardKnowledge", "Hanabi-Full-Minimal", "Hanabi-Small", "Hanabi-Very-Small"]:
-            return rl_env.make(self.variant, num_players=self.num_players)
-            
+            env = rl_env.make(self.variant, num_players=self.num_players)
+            if seed is not None:
+                # rl_env.make() doesn't expose a seed param, but HanabiEnv stores
+                # its config dict; extract it, inject the seed, and rebuild.
+                seeded_cfg = dict(env.config)
+                seeded_cfg['seed'] = seed_val
+                return rl_env.HanabiEnv(config=seeded_cfg)
+            return env
+
         env_config = {
             "colors": getattr(self.config, 'colors', 5),
             "ranks": getattr(self.config, 'ranks', 5),
@@ -46,7 +58,8 @@ class Hanabi:
             "hand_size": getattr(self.config, 'hand_size', 5),
             "max_information_tokens": getattr(self.config, 'max_information_tokens', 8),
             "max_life_tokens": getattr(self.config, 'max_life_tokens', 3),
-            "observation_type": getattr(self.config, 'observation_type', 1)
+            "observation_type": getattr(self.config, 'observation_type', 1),
+            "seed": seed_val,
         }
         return rl_env.HanabiEnv(config=env_config)
 
@@ -87,8 +100,16 @@ class Hanabi:
                         agent.reset_game_state("+".join(sorted(opponent_keys)), game_intro)
                 agent.current_player_index = i
         
+        # If a pregenerated seed was injected by run_match, recreate the env
+        # with that seed so the card deal is identical across runs for the same
+        # match index. Cooperative games don't need seat-swap pairing.
+        forced_seed = getattr(self, '_forced_seed', None)
+        if forced_seed is not None:
+            self.env = self._create_env(seed=forced_seed)
+
         obs = self.env.reset()
         done = False
+
         
         # Initialize hint rounds, draw rounds, and player hint history
         self.hint_rounds = []

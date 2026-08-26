@@ -23,11 +23,16 @@ class FirstSealedAuction(OpenSpielGame):
             if a != 0:
                 filtered_actions.append(a)
                 filtered_probs.append(p)
-                
-        prob_sum = sum(filtered_probs)
-        if prob_sum > 0:
-            filtered_probs = [p / prob_sum for p in filtered_probs]
-            return np.random.choice(filtered_actions, p=filtered_probs)
+
+        rng = getattr(self, '_rng', None)
+        if filtered_actions:
+            if rng is not None:
+                return rng.choices(population=filtered_actions, weights=filtered_probs)[0]
+            prob_sum = sum(filtered_probs)
+            return np.random.choice(filtered_actions, p=[p / prob_sum for p in filtered_probs])
+
+        if rng is not None:
+            return rng.choices(population=list(action_list), weights=list(prob_list))[0]
         return np.random.choice(action_list, p=prob_list)
 
     def openspiel_observation_to_dict(self, current_player_idx, openspiel_obs):

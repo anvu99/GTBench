@@ -225,7 +225,7 @@ class ProactiveQueryAgent(PromptAgent):
         return result
 
     def _get_strategy_injection_block(self, env_name=None):
-        top_strats = self.strategy_store.get_mixed_top_k(top_score_k=6, top_recent_k=4)
+        top_strats = self.strategy_store.get_mixed_top_k(top_score_k=10, top_recent_k=0)
         if top_strats:
             strat_lines = []
             for s in top_strats:

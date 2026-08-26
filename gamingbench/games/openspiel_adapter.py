@@ -42,6 +42,11 @@ class OpenSpielGame:
         self.logger.info(self.env.action_spaces)
 
     def _sample_chance_action(self, action_list, prob_list):
+        rng = getattr(self, '_rng', None)
+        if rng is not None:
+            # Use the isolated per-game Python RNG for reproducibility.
+            # random.choices() accepts relative weights (no need to normalize).
+            return rng.choices(population=list(action_list), weights=list(prob_list))[0]
         return np.random.choice(action_list, p=prob_list)
 
     def play(self, agent_list, model_list, tracker):

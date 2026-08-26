@@ -1,0 +1,4 @@
+agent_name: AgentProAgent
+num_generations: 1
+majority_vote: False
+agentpro_store_path: agentpro_store.json

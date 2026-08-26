@@ -120,6 +120,7 @@ class VLLMModel(BaseModel):
         gpu_memory_utilization = getattr(config, 'gpu_memory_utilization', 0.83)
         
         max_num_seqs = getattr(config, 'max_num_seqs', 64)
+        max_num_batched_tokens = getattr(config, 'max_num_batched_tokens', 16384)
         
         engine_kwargs = {
             "tensor_parallel_size": tensor_parallel_size,
@@ -129,7 +130,7 @@ class VLLMModel(BaseModel):
             "trust_remote_code": True,
             "kv_cache_dtype": "fp8",  # halves KV-cache VRAM; no quality change
             "enable_chunked_prefill": True,
-            "max_num_batched_tokens": 4096,
+            "max_num_batched_tokens": max_num_batched_tokens,
             "gpu_memory_utilization": gpu_memory_utilization,
             "max_num_seqs": max_num_seqs,
         }

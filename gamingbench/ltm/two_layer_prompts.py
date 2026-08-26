@@ -28,7 +28,7 @@ You are analyzing a game state.
 Here are your top-performing strategic questions from past games against this other player:
 {top_questions}
 
-Here is your current working memory (a short summary of what you already know and what you are currently exploring about this other player):
+Here is your current working memory (a short summary of the strategic insights you have learned about this other player):
 {working_memory}
 
 Based on the current observation, please do TWO things:
@@ -490,7 +490,7 @@ Example:
       "desired_additional_info": "<Strictly state what is missing to answer the specific question, or a more detailed metric falling entirely within the question's exact scope. DO NOT ask for more samples. DO NOT expand the scope to different conditions. Leave empty ONLY if the current information is fully sufficient.>"
     }
   ],
-  "working_memory": "<Write a NEW rolling summary (MAXIMUM 6 sentences) of the most important strategic insights you have learned and the questions you are actively exploring about this other player.>"
+  "working_memory": "<Write a NEW rolling summary (MAXIMUM 6 sentences) of the most important strategic insights you have learned about this other player through your questions.>"
 }
 ```
 """
@@ -529,7 +529,7 @@ Example:
       "desired_additional_info": "<Strictly state what is missing to answer the specific question, or a more detailed metric falling entirely within the question's exact scope. DO NOT ask for more samples. DO NOT expand the scope to different conditions. Leave empty ONLY if the current information is fully sufficient.>"
     }
   ],
-  "working_memory": "<Write a NEW rolling summary (MAXIMUM 6 sentences) of the most important strategic insights you have learned and the questions you are actively exploring about this other player.>"
+  "working_memory": "<Write a NEW rolling summary (MAXIMUM 6 sentences) of the most important strategic insights you have learned about this other player through your questions.>"
 }
 ```
 """
@@ -537,7 +537,7 @@ Example:
 STRATEGY_INJECTION_BLOCK = """\
 === STRATEGY MEMORY ===
 Top strategies you have used in past games (ranked by performance). 
-(Note: 'Success' count is how many times the Expected Successful Outcome occurred, and 'Failure' count is how many times the Anticipated Failure Outcome occurred. 'Avg Utility' is the empirical average payoff or winrate).
+(TIP: 'Avg Utility' is the empirical average score earned when this strategy was applied in past games, and 'Games' is how many times it has been tested. If a strategy's description seems compatible and followable given your current game state, you are encouraged to follow the one with the highest Avg Utility. If none of the listed strategies feel like a good fit, or if you believe a novel approach could exceed the Avg Utility of the relevant strategies, you are also encouraged to create a new one instead.)
 
 {top_strategies}
 ======================

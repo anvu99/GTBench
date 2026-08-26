@@ -12,15 +12,27 @@ class Negotiation(OpenSpielGame):
         self._init_custom_utils()
 
     def _init_custom_utils(self):
-        import random
+        rng = getattr(self, '_rng', None)
+        if rng is None:
+            # No isolated RNG available; custom_agent_utils will be injected
+            # by run_match from the pregenerated game_state. Just ensure the
+            # attribute exists so downstream code never hits AttributeError.
+            if not hasattr(self, 'custom_agent_utils'):
+                self.custom_agent_utils = {}
+            return
         self.custom_agent_utils = {}
         for p in range(2):
-            cuts = sorted(random.sample(range(1, 20), 2))
+            cuts = sorted(rng.sample(range(1, 20), 2))
             self.custom_agent_utils[p] = [cuts[0], cuts[1] - cuts[0], 20 - cuts[1]]
 
     def reset(self):
         super().reset()
-        self._init_custom_utils()
+        # Only regenerate if an isolated RNG is present (i.e., pregeneration
+        # context). In normal match play, custom_agent_utils is set directly
+        # by run_match from the pregenerated game_state.
+        if getattr(self, '_rng', None) is not None:
+            self._init_custom_utils()
+
 
     def get_opponent_board_state(self, board_str):
         # Safely swap Opponent and Your prefixes

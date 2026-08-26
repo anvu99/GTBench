@@ -4,6 +4,7 @@ import os.path
 import argparse
 import pathlib
 import queue
+import random as _random_mod
 import threading
 from gamingbench.utils import utils
 from gamingbench.environments.base_env import BaseGameEnv
@@ -64,6 +65,89 @@ def _get_agent_store_path(agent):
            getattr(agent, 'rules_store_path', 
            getattr(agent, 'memory_bank_path', 
            getattr(agent, 'store_path', None))))))
+
+
+# ── Game-state pregeneration ──────────────────────────────────────────────────
+# Games with private information (negotiation, first_sealed_auction, liars_dice)
+# need their random state generated *before* any parallel workers start so that:
+#   1. The global RNG is advanced in a single deterministic sequence.
+#   2. Paired exchange-first-player matches share the same private information.
+#   3. Thread scheduling can never alter the outcomes.
+
+_GAMES_WITH_CHANCE_NODES = {'first_sealed_auction', 'liars_dice', 'kuhn_poker', 'pig'}
+_GAMES_WITH_CUSTOM_UTILS = {'negotiation'}
+# All hanabi variant names as they appear in --game-name / YAML filenames
+_HANABI_GAME_NAMES = {'hanabi', 'hanabi-micro', 'hanabi-small', 'hanabi3-micro', 'hanabi-small-custom'}
+
+
+def _draw_game_state(game, game_name, rng):
+    """Draw one match's random private information using *rng* (a random.Random instance).
+
+    Returns a dict that run_match will apply directly to the game object.
+    Supported keys:
+      'custom_agent_utils'   – dict {player_idx: [v0, v1, v2]} for negotiation.
+      'forced_chance_actions' – list of OpenSpiel chance actions for games with
+                                 chance nodes (first_sealed_auction, liars_dice, …).
+    """
+    state = {}
+
+    if game_name in _GAMES_WITH_CUSTOM_UTILS:
+        # negotiation: two cut-points split 20 utility points across 3 items per player.
+        custom_utils = {}
+        for p in range(2):
+            cuts = sorted(rng.sample(range(1, 20), 2))
+            custom_utils[p] = [cuts[0], cuts[1] - cuts[0], 20 - cuts[1]]
+        state['custom_agent_utils'] = custom_utils
+
+    if game_name in _GAMES_WITH_CHANCE_NODES:
+        # OpenSpiel games: inject our RNG into the game temporarily so that
+        # _sample_chance_action uses it instead of global np.random.
+        game._rng = rng
+        game.reset()
+        actions = []
+        while game.env.is_chance_node():
+            outcomes = game.env.chance_outcomes()
+            action_list, prob_list = zip(*outcomes)
+            action = game._sample_chance_action(action_list, prob_list)
+            actions.append(action)
+            game.env.apply_action(action)
+        state['forced_chance_actions'] = actions
+
+    if game_name in _HANABI_GAME_NAMES:
+        # Generate a random integer seed for the C++ HanabiGame RNG.
+        # Positive, 30-bit to fit safely in C++ int.
+        state['hanabi_seed'] = rng.randint(0, 2 ** 30)
+
+    return state
+
+
+def _pregenerate_game_states(game, game_name, num_matches, seed, exchange_first_player):
+    """Pre-generate all random private information for every match before workers start.
+
+    A single isolated random.Random(seed) is advanced sequentially, so results
+    are identical across runs regardless of thread scheduling or model __init__
+    RNG consumption.
+
+    For exchange_first_player: odd matches copy the preceding even match's state
+    so paired games share identical private information while agents swap seats,
+    giving each agent equal exposure to both valuation positions.
+
+    Returns a list of game-state dicts, one per match (0..num_matches-1).
+    """
+    rng = _random_mod.Random(seed)
+    states = []
+    for match_idx in range(num_matches):
+        if exchange_first_player and match_idx % 2 == 1:
+            # Paired match: same private info, agents will swap seats in run_match.
+            # Deep-copy so each match owns independent list objects — no shared
+            # mutable state between parallel workers even for paired games.
+            states.append(copy.deepcopy(states[-1]))
+        else:
+            states.append(_draw_game_state(game, game_name, rng))
+    # Remove the temporary _rng we injected during chance-node sampling.
+    if hasattr(game, '_rng'):
+        del game._rng
+    return states
 
 def _get_memory_snapshot(agent):
     """Returns a serializable snapshot of the agent's memory."""
@@ -257,21 +341,13 @@ def run_game(game_name):
 
     game_env.set_game(game)
 
-    pregenerated_chance_actions = []
-    if getattr(args, 'exchange_first_player', False) and game_name in ['liars_dice', 'first_sealed_auction']:
-        for match_idx in range(args.num_matches):
-            if match_idx % 2 == 1:
-                pregenerated_chance_actions.append(list(pregenerated_chance_actions[-1]))
-            else:
-                game.reset()
-                actions = []
-                while game.env.is_chance_node():
-                    outcomes = game.env.chance_outcomes()
-                    action_list, prob_list = zip(*outcomes)
-                    action = game._sample_chance_action(action_list, prob_list)
-                    actions.append(action)
-                    game.env.apply_action(action)
-                pregenerated_chance_actions.append(actions)
+    # Pre-generate all random game state (private valuations, chance actions) now,
+    # in a single thread, before any parallel workers start. This guarantees that
+    # the seed controls game setup deterministically regardless of thread scheduling.
+    pregenerated_game_states = _pregenerate_game_states(
+        game, game_name, args.num_matches, args.seed,
+        exchange_first_player=getattr(args, 'exchange_first_player', False),
+    )
 
     lock = threading.Lock()
     batch_size = getattr(args, 'batch_size', 1)
@@ -337,7 +413,7 @@ def run_game(game_name):
                     'args': args,
                     'lock': lock,
                     'batch_queue': batch_q,
-                    'forced_chance_actions': list(pregenerated_chance_actions[match_idx]) if pregenerated_chance_actions else []
+                    'game_state': pregenerated_game_states[match_idx],
                 })
 
             # Run all N games in the batch in parallel; blocks until all complete
@@ -403,7 +479,7 @@ def run_game(game_name):
                 'result_path': result_path,
                 'args': args,
                 'lock': lock,
-                'forced_chance_actions': list(pregenerated_chance_actions[match_idx]) if pregenerated_chance_actions else []
+                'game_state': pregenerated_game_states[match_idx],
             }
             results.append(run_match(match_arg))
     else:
@@ -424,7 +500,7 @@ def run_game(game_name):
                 'result_path': result_path,
                 'args': args,
                 'lock': lock,
-                'forced_chance_actions': list(pregenerated_chance_actions[match_idx]) if pregenerated_chance_actions else []
+                'game_state': pregenerated_game_states[match_idx],
             })
         results = utils.parallel_func(run_match, match_arg_list,
                                       num_workers=args.num_workers)
@@ -457,14 +533,27 @@ def run_match(params):
     result_path = params['result_path']
 
     args = params['args']
-    forced_chance_actions = params.get('forced_chance_actions', [])
-    
+    game_state = params.get('game_state', {})
+
     game_env = BaseGameEnv()
     game = utils.load_game(os.path.join(
         args.game_config_root, f'{game_name}.yaml'))
-    
-    # inject the forced chance actions into the game
-    game.forced_chance_actions = list(forced_chance_actions)
+
+    # Apply the pregenerated private information for this match.
+    # custom_agent_utils: negotiation private valuations, set directly (no RNG needed).
+    if 'custom_agent_utils' in game_state:
+        game.custom_agent_utils = {int(k): list(v) for k, v in game_state['custom_agent_utils'].items()}
+    elif hasattr(game, '_init_custom_utils') and not game.custom_agent_utils:
+        # Fallback for games not covered by pregeneration.
+        game._rng = _random_mod.Random(args.seed + match_idx)
+        game._init_custom_utils()
+
+    # forced_chance_actions: OpenSpiel private deals (valuations, card hands, dice).
+    game.forced_chance_actions = list(game_state.get('forced_chance_actions', []))
+
+    # hanabi_seed: deterministic card deal for the hanabi_learning_environment backend.
+    if 'hanabi_seed' in game_state:
+        game._forced_seed = game_state['hanabi_seed']
 
     game_env.save_game_config(utils.load_config(
         os.path.join(args.game_config_root, f'{game_name}.yaml')))
@@ -527,7 +616,13 @@ def run_match_nplayer(params):
 
     game_env = BaseGameEnv()
     game = utils.load_game(os.path.join(args.game_config_root, f'{game_name}.yaml'))
-    
+
+    # Inject a per-game isolated RNG (same logic as run_match).
+    import random as _random_mod
+    game._rng = _random_mod.Random(args.seed + match_idx)
+    if hasattr(game, '_init_custom_utils'):
+        game._init_custom_utils()
+
     # inject the forced chance actions into the game
     game.forced_chance_actions = list(forced_chance_actions)
 
@@ -863,7 +958,7 @@ def main(args):
             else:
                 os.environ["DEEPINFRA_API_KEY"] = k
 
-    utils.set_seed(args.seed)
+    utils.set_seed(args.seed)  # Initial seed for agent/model init reproducibility.
 
     for game_name in args.game_names:
         run_game(game_name)
