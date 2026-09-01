@@ -13,6 +13,7 @@ from gamingbench.ltm.stat_pool import StatPool
 from gamingbench.ltm.strategy_store import StrategyStore
 from gamingbench.ltm.two_layer_prompts import (
     PQA_QUESTION_GEN_PROMPT,
+    PQA_QUESTION_GEN_PROMPT_MMLU_PRO,
     STAT_PROPOSAL_PROMPT,
     STAT_UPDATE_PROMPT,
     MEMORY_CONTENT_UPDATE_PROMPT,
@@ -113,6 +114,7 @@ class ProactiveQueryAgent(PromptAgent):
             self.stat_pool.load(self.stat_pool_path)
             
         self.use_strategy_memory = getattr(config, "use_strategy_memory", True)
+        self.use_proactive_memory = getattr(config, "use_proactive_memory", True)
         self.strategy_store_path = getattr(config, "strategy_store_path", "strategy_store.json")
         self.strategy_store = StrategyStore()
         if self.use_strategy_memory and os.path.exists(self.strategy_store_path):
@@ -282,9 +284,14 @@ class ProactiveQueryAgent(PromptAgent):
                     top_q_list.append(f"[{m['id']}] \"{m['question']}\"")
                 top_questions_text = "\n".join(top_q_list)
                 
+        if "mmlu" in observations.get("env_name", "").lower():
+            prompt_template = PQA_QUESTION_GEN_PROMPT_MMLU_PRO
+        else:
+            prompt_template = PQA_QUESTION_GEN_PROMPT
+
         messages = [
             {'role': 'system', 'content': sys_prompt},
-            {'role': 'user', 'content': f"--- CURRENT GAME STATE ---\n{obs_prompt}\n\n{PQA_QUESTION_GEN_PROMPT.format(top_questions=top_questions_text, working_memory=self.match_working_memory, max_questions=self.max_questions_per_step)}"}
+            {'role': 'user', 'content': f"--- CURRENT GAME STATE ---\n{obs_prompt}\n\n{prompt_template.format(top_questions=top_questions_text, working_memory=self.match_working_memory, max_questions=self.max_questions_per_step)}"}
         ]
         
         max_retries = 3
@@ -422,7 +429,10 @@ class ProactiveQueryAgent(PromptAgent):
         query_list = []
         
         # 1. Proactive Query Generation
-        summary_text, questions, sum_query = self._generate_summary_and_question(observations)
+        if getattr(self, "use_proactive_memory", True):
+            summary_text, questions, sum_query = self._generate_summary_and_question(observations)
+        else:
+            summary_text, questions, sum_query = "", [], None
         if sum_query:
             query_list.append(sum_query)
             
@@ -679,7 +689,10 @@ class ProactiveQueryAgent(PromptAgent):
         observations['chat_context'] = chat_history_str
         
         # 1. Proactive Query Generation for Chat
-        summary_text, questions, sum_query = self._generate_summary_and_question(observations)
+        if getattr(self, "use_proactive_memory", True):
+            summary_text, questions, sum_query = self._generate_summary_and_question(observations)
+        else:
+            summary_text, questions, sum_query = "", [], None
         if sum_query:
             query_list.append(sum_query)
             

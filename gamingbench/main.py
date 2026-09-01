@@ -52,6 +52,8 @@ def get_args():
                         help='Number of games per LTM update batch. Default 1 = update after every game (existing behaviour).')
     parser.add_argument('--use-strategy-memory', default=False, action='store_true',
                         help='Enable strategy memory for ProactiveQueryAgent. When absent, only the proactive query store is used.')
+    parser.add_argument('--use-proactive-memory', default=False, action='store_true',
+                        help='Enable proactive memory for ProactiveQueryAgent.')
     args = parser.parse_args()
 
     return args
@@ -318,6 +320,8 @@ def run_game(game_name):
         a.memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
         if hasattr(a, 'use_strategy_memory'):
             a.use_strategy_memory = getattr(args, 'use_strategy_memory', False)
+        if hasattr(a, 'use_proactive_memory'):
+            a.use_proactive_memory = getattr(args, 'use_proactive_memory', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -759,6 +763,8 @@ def run_game_nplayer(game_name):
         a.memory_mode = getattr(args, 'n_player_memory_mode', 'combined')
         if hasattr(a, 'use_strategy_memory'):
             a.use_strategy_memory = getattr(args, 'use_strategy_memory', False)
+        if hasattr(a, 'use_proactive_memory'):
+            a.use_proactive_memory = getattr(args, 'use_proactive_memory', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
