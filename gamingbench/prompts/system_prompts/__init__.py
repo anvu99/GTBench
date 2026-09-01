@@ -12,6 +12,7 @@ from gamingbench.prompts.system_prompts import prisoners_dilemma
 from gamingbench.prompts.system_prompts import cooperative_negotiation
 from gamingbench.prompts.system_prompts import hanabi
 from gamingbench.prompts.system_prompts import texas_holdem
+from gamingbench.prompts.system_prompts import mmlu_pro_qa
 
 # maps
 mapping = {
@@ -26,7 +27,8 @@ mapping = {
     'python_iterated_prisoners_dilemma': prisoners_dilemma,
     'cooperative_negotiation': cooperative_negotiation,
     'hanabi': hanabi,
-    'texas_holdem': texas_holdem
+    'texas_holdem': texas_holdem,
+    'mmlu_pro_qa': mmlu_pro_qa
 }
 
 

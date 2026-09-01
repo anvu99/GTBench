@@ -45,6 +45,9 @@ def get_step_env_regex_and_format(env_name, turn_type=None):
     elif env_name == 'hanabi':
         regex = r'(<(?:PLAY|DISCARD) \d+>|<HINT .+? (?:COLOR [A-Za-z]+|RANK \d+)>)'
         format = '<PLAY N>, <DISCARD N>, <HINT NAME COLOR Color>, or <HINT NAME RANK N>'
+    elif env_name == 'mmlu_pro_qa':
+        regex = '<[A-Z]>'
+        format = '<X>, e.g., <A>, <B>'
     else:
         raise NotImplementedError
     return regex, format

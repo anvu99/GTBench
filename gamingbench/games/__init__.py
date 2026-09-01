@@ -11,3 +11,4 @@ from gamingbench.games.prisoners_dilemma import PrisonersDilemma
 from gamingbench.games.cooperative_negotiation import CooperativeNegotiation
 from gamingbench.games.hanabi import Hanabi
 from gamingbench.games.texas_holdem import TexasHoldem
+from gamingbench.games.mmlu_pro_qa import MmluProQA

@@ -12,7 +12,7 @@ import json
 
 games = ['tictactoe', 'connect4', 'texas_holdem', 'texasholdem', 'neuron_poker', 'backgammon', 'breakthrough',
          'first_sealed_auction', 'gin_rummy', 'liars_dice', 'negotiation', 'nim', 'pig', 'kuhn_poker',
-         'prisoners_dilemma', 'cooperative_negotiation', 'hanabi', 'hanabi-micro', 'hanabi-small', 'hanabi3-micro', 'hanabi-small-custom']
+         'prisoners_dilemma', 'cooperative_negotiation', 'hanabi', 'hanabi-micro', 'hanabi-small', 'hanabi3-micro', 'hanabi-small-custom', 'mmlu_pro_qa']
 
 
 def get_args():
@@ -277,7 +277,7 @@ def clone_agent_for_batch(original_agent, memory_snapshot: dict):
 
 def run_game(game_name):
     game_config = utils.load_config(os.path.join(args.game_config_root, f'{game_name}.yaml'))
-    if getattr(game_config, 'num_players', 2) > 2 or len(args.agent_configs) > 2:
+    if getattr(game_config, 'num_players', 2) != 2 or len(args.agent_configs) > 2:
         return run_game_nplayer(game_name)
 
     log_root = args.exp_root
@@ -687,7 +687,7 @@ def run_match_nplayer(params):
     try:
         from gamingbench.utils.history_tracker import HistoryTracker
         tracker = HistoryTracker()
-        game_env.game.play(agents, models, tracker, seat_mapping=params.get('seat_mapping'))
+        game_env.game.play(agents, models, tracker, seat_mapping=params.get('seat_mapping'), match_idx=match_idx)
         logger.info(f'Game {match_idx} ends')
         logger.info(tracker.matches[-1].to_dict())
 
