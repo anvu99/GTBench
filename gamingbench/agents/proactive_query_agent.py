@@ -23,7 +23,8 @@ from gamingbench.ltm.two_layer_prompts import (
     IN_GAME_ASSESSMENT_SUFFIX,
     IN_GAME_ASSESSMENT_SUFFIX_NO_STRATEGY,
     STRATEGY_INJECTION_BLOCK,
-    STRATEGY_SCORING_PROMPT,
+    STRATEGY_REFLECTION_EXTRACTION_PROMPT,
+    STRATEGY_TREND_SYNTHESIS_PROMPT,
     STRATEGY_MERGE_PROMPT
 )
 from gamingbench.prompts.observation_prompts import construct_observation_prompt, construct_game_intro
@@ -224,22 +225,45 @@ class ProactiveQueryAgent(PromptAgent):
             result.embedder = embedder
         return result
 
-    def _get_strategy_injection_block(self, env_name=None):
-        top_strats = self.strategy_store.get_mixed_top_k(top_score_k=10, top_recent_k=0)
-        if top_strats:
-            strat_lines = []
-            for s in top_strats:
-                # strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Success: {s.get('success_count', 0)} | Failure: {s.get('failure_count', 0)} | Avg Utility: {s.get('average_utility', 0.0):.2f})\nDefinition: {s['definition']}\nExpected Successful Outcome: {s.get('success_criteria', 'None')}\nAnticipated Failure Outcome: {s.get('failure_criteria', 'None')}\n")
+    def _get_strategy_injection_block(self, env_name=None, top_score_k=7, top_recent_k=0, bottom_k=3):
+        # 1. Fetch Best Strategies
+        top_strats = self.strategy_store.get_top_k_by_score(top_k=top_score_k)
+        top_ids = {s['id'] for s in top_strats}
+        
+        # 2. Fetch New Strategies (most recent that are not in best)
+        all_strats = self.strategy_store.get_all()
+        recent_strats = [s for s in all_strats if s['id'] not in top_ids]
+        recent_strats.sort(key=lambda s: s.get("created_at", 0), reverse=True)
+        new_strats = recent_strats[:top_recent_k]
+        new_ids = {s['id'] for s in new_strats}
+        
+        # 3. Fetch Worst Strategies (lowest utility, tested at least once, not in best or new)
+        remaining_strats = [s for s in all_strats if s['id'] not in top_ids and s['id'] not in new_ids and s.get("uses_count", 0) > 0]
+        remaining_strats.sort(key=lambda s: (s.get("average_utility", 0.0), -s.get("created_at", 0)))
+        worst_strats = remaining_strats[:bottom_k]
+        
+        strat_lines = []
+        
+        def _format_strats(strats):
+            if not strats: return
+            for s in strats:
                 avg_util = s.get('average_utility', 0.0)
                 games = s.get('uses_count', 0)
+                trend = s.get('recent_execution_log', 'No execution data yet. This strategy has not been tested.')
                 if env_name == "liars_dice":
                     win_rate = (avg_util + 1) / 2
-                    strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Win Rate: {win_rate:.0%} | Games: {games})\nDefinition: {s['definition']}\n")
+                    strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Win Rate: {win_rate:.0%} | Games: {games})\nReasoning: {s['strategic_reasoning']}\nAction: {s['tactical_guidance']}\nRecent Execution Log: {trend}\n")
                 else:
-                    strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Avg Utility: {avg_util:.2f} | Games: {games})\nDefinition: {s['definition']}\n")
-            return STRATEGY_INJECTION_BLOCK.format(top_strategies="\n".join(strat_lines))
-        else:
-            return STRATEGY_INJECTION_BLOCK.format(top_strategies="No strategies available yet. You must create a new one.")
+                    strat_lines.append(f"[{s['id']}] \"{s['title']}\" (Avg Utility: {avg_util:.2f} | Games: {games})\nReasoning: {s['strategic_reasoning']}\nAction: {s['tactical_guidance']}\nRecent Execution Log: {trend}\n")
+                    
+        _format_strats(top_strats)
+        _format_strats(new_strats)
+        _format_strats(worst_strats)
+        
+        if not strat_lines:
+            strat_lines.append("No strategies available yet. You must create a new one.")
+            
+        return STRATEGY_INJECTION_BLOCK.format(strategy_list="\n".join(strat_lines))
 
     def _generate_summary_and_question(self, observations):
         """
@@ -440,10 +464,14 @@ class ProactiveQueryAgent(PromptAgent):
         system_prompt, observation_prompt = PromptAgent._build_prompts(self, observations)
         
         # 3. Prompt Injection: Insert strategies and retrieved memories directly above the board state
-        wm_injection = f"=== WORKING MEMORY ===\n{self.match_working_memory}\n=====================\n"
+        if not self.match_working_memory or self.match_working_memory.strip() == "No working memory established yet.":
+            wm_injection = ""
+        else:
+            wm_injection = f"=== WORKING MEMORY ===\n{self.match_working_memory}\n=====================\n"
+            
         if self.use_strategy_memory:
             strat_injection = self._get_strategy_injection_block(env_name)
-            full_injection = wm_injection + "\n" + strat_injection
+            full_injection = (wm_injection + "\n" + strat_injection) if wm_injection else strat_injection
         else:
             full_injection = wm_injection
         if all_retrieved_mems_list:
@@ -517,7 +545,7 @@ class ProactiveQueryAgent(PromptAgent):
                         else:
                             parsed_strategy = strategy_raw
                     elif strat_type == "new":
-                        required = ["title", "definition", "success_criteria", "failure_criteria"]
+                        required = ["title", "strategic_reasoning", "tactical_guidance", "desired_post_game_reflection"]
                         missing = [f for f in required if not strategy_raw.get(f, "").strip()]
                         if missing:
                             error_parts.append(f"New strategy is missing required fields: {missing}.")
@@ -691,10 +719,14 @@ class ProactiveQueryAgent(PromptAgent):
             
         system_prompt, observation_prompt = PromptAgent._build_prompts(self, observations)
         
-        wm_injection = f"=== WORKING MEMORY ===\n{self.match_working_memory}\n=====================\n"
+        if not self.match_working_memory or self.match_working_memory.strip() == "No working memory established yet.":
+            wm_injection = ""
+        else:
+            wm_injection = f"=== WORKING MEMORY ===\n{self.match_working_memory}\n=====================\n"
+            
         if self.use_strategy_memory:
             strat_injection = self._get_strategy_injection_block(env_name)
-            full_injection = wm_injection + "\n" + strat_injection
+            full_injection = (wm_injection + "\n" + strat_injection) if wm_injection else strat_injection
         else:
             full_injection = wm_injection
         if all_retrieved_mems_list:
@@ -754,7 +786,7 @@ class ProactiveQueryAgent(PromptAgent):
                         else:
                             parsed_strategy = strategy_raw
                     elif strat_type == "new":
-                        required = ["title", "definition", "success_criteria", "failure_criteria"]
+                        required = ["title", "strategic_reasoning", "tactical_guidance", "desired_post_game_reflection"]
                         missing = [f for f in required if not strategy_raw.get(f, "").strip()]
                         if missing:
                             error_parts.append(f"New strategy is missing required fields: {missing}.")
@@ -920,7 +952,7 @@ class ProactiveQueryAgent(PromptAgent):
                 self.strategy_store.save(self.strategy_store_path)
 
     def _process_strategy_log(self, strategy_log, game_history):
-        """Scores followed strategies and merges/scores new strategies at the end of a game/batch."""
+        """Extracts reflections and updates trends for strategies at the end of a game/batch."""
         if not strategy_log:
             return []
             
@@ -944,8 +976,8 @@ class ProactiveQueryAgent(PromptAgent):
         if not followed_strats and not new_strats:
             return []
             
-        # 2. Score strategies (followed and new)
-        scores = self._score_strategies(followed_strats, new_strats, game_history)
+        # 2. Extract Reflections (followed and new)
+        reflections = self._extract_strategy_reflections(followed_strats, new_strats, game_history)
         
         # Extract utility from game_history
         import re
@@ -956,51 +988,54 @@ class ProactiveQueryAgent(PromptAgent):
         if match:
             utility = float(match.group(1))
         
-        # 3. Apply scores and utility to followed strategies
-        for s_id, score in scores.items():
+        # 3. Apply reflections and utility to followed strategies
+        for s_id, observation in reflections.items():
             if s_id.startswith("strat_"):
-                self.strategy_store.update_score(s_id, score)
+                self.strategy_store.add_reflection(s_id, observation)
                 self.strategy_store.update_utility(s_id, utility)
                 
-        # 4. Return new strategies with their scores and utility for batch-level merging
-        new_strats_with_scores = []
+        # 4. Synthesize trends for followed strategies
+        if followed_strats:
+            self._synthesize_strategy_trends(followed_strats)
+                
+        # 5. Return new strategies with their reflection and utility
+        new_strats_with_utility = []
         if new_strats:
             for idx, s in enumerate(new_strats):
                 temp_id = f"temp_new_{idx}"
-                score = scores.get(temp_id)
-                if score is not None:
-                    new_strats_with_scores.append((s, score, utility))
+                obs = reflections.get(temp_id, "No reflection available.")
+                new_strats_with_utility.append((s, obs, utility))
                 
-        return new_strats_with_scores
+        return new_strats_with_utility
 
-    def _score_strategies(self, followed_strats, new_strats, game_history):
-        strategies_to_score_text = ""
+    def _extract_strategy_reflections(self, followed_strats, new_strats, game_history):
+        strategies_to_reflect_text = ""
         for s in followed_strats:
-            strategies_to_score_text += f"ID: {s['id']}\nTitle: {s['title']}\nDefinition: {s['definition']}\nSuccess Criteria: {s['success_criteria']}\nFailure Criteria: {s['failure_criteria']}\n\n"
+            strategies_to_reflect_text += f"ID: {s['id']}\nTitle: {s['title']}\nReasoning: {s['strategic_reasoning']}\nGuidance: {s['tactical_guidance']}\nDesired Reflection: {s['desired_post_game_reflection']}\n\n"
             
         for idx, s in enumerate(new_strats):
             temp_id = f"temp_new_{idx}"
-            strategies_to_score_text += f"ID: {temp_id}\nTitle: {s['title']}\nDefinition: {s['definition']}\nSuccess Criteria: {s['success_criteria']}\nFailure Criteria: {s['failure_criteria']}\n\n"
+            strategies_to_reflect_text += f"ID: {temp_id}\nTitle: {s['title']}\nReasoning: {s['strategic_reasoning']}\nGuidance: {s['tactical_guidance']}\nDesired Reflection: {s['desired_post_game_reflection']}\n\n"
             
         messages = [
             {'role': 'system', 'content': "You are an expert game strategist evaluating the performance of game strategies."},
-            {'role': 'user', 'content': STRATEGY_SCORING_PROMPT.format(strategies_to_score=strategies_to_score_text.strip(), game_trajectory=game_history)}
+            {'role': 'user', 'content': STRATEGY_REFLECTION_EXTRACTION_PROMPT.format(strategies_to_reflect=strategies_to_reflect_text.strip(), game_trajectory=game_history)}
         ]
         
         expected_ids = set([s['id'] for s in followed_strats] + [f"temp_new_{idx}" for idx in range(len(new_strats))])
         
-        scores_map = {}
+        reflections_map = {}
         max_retries = 3
         for attempt in range(max_retries):
             responses, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
             
             if attempt == 0:
-                self.logger.info(f'Strategy Scoring Prompt: {messages[1]["content"]}')
-            self.logger.info(f'Strategy Scoring Raw Response (Attempt {attempt+1}): {responses}')
+                self.logger.info(f'Strategy Reflection Prompt: {messages[1]["content"]}')
+            self.logger.info(f'Strategy Reflection Raw Response (Attempt {attempt+1}): {responses}')
             
             raw_response = responses[0]
             stripped_response = strip_thinking_block(raw_response)
-            self.logger.info(f'Strategy Scoring Stripped Response (Attempt {attempt+1}):\n{stripped_response}')
+            self.logger.info(f'Strategy Reflection Stripped Response (Attempt {attempt+1}):\n{stripped_response}')
             try:
                 parsed_json = extract_json_block(stripped_response)
                 
@@ -1009,7 +1044,7 @@ class ProactiveQueryAgent(PromptAgent):
                     s_log_file = os.path.join(log_dir, f"{self.agent_name}_strategy_processing.log")
                     try:
                         with open(s_log_file, "a") as f:
-                            f.write("=== STRATEGY SCORING ===\n")
+                            f.write("=== STRATEGY REFLECTION ===\n")
                             f.write(f"PROMPT:\n{messages[1]['content']}\n")
                             f.write(f"RAW ANSWER:\n{raw_response}\n")
                             f.write(f"STRIPPED ANSWER:\n{stripped_response}\n")
@@ -1017,24 +1052,98 @@ class ProactiveQueryAgent(PromptAgent):
                     except Exception as e:
                         self.logger.error(f"Failed to write to strategy processing log: {e}")
                         
-                scores = parsed_json.get("scores", [])
-                for s in scores:
-                    s_id = s.get("strategy_id")
-                    score_val = s.get("score", "").lower()
-                    if s_id and score_val in ["success", "failure"]:
-                        scores_map[s_id] = score_val
+                reflections = parsed_json.get("reflections", [])
+                for r in reflections:
+                    s_id = r.get("strategy_id")
+                    obs = r.get("reflection_observation", "").strip()
+                    if s_id and obs:
+                        reflections_map[s_id] = obs
                 
-                missing_ids = expected_ids - set(scores_map.keys())
+                missing_ids = expected_ids - set(reflections_map.keys())
                 if missing_ids:
-                    raise ValueError(f"Missing scores for strategies: {missing_ids}")
+                    raise ValueError(f"Missing reflections for strategies: {missing_ids}")
                     
                 break
             except Exception as e:
-                self.logger.warning(f"Failed to parse strategy scores on attempt {attempt+1}: {str(e)}")
+                self.logger.warning(f"Failed to parse strategy reflections on attempt {attempt+1}: {str(e)}")
                 messages.append({"role": "assistant", "content": raw_response})
-                messages.append({"role": "user", "content": f"Failed: {str(e)}. Please try again and ensure ALL strategies are scored with exactly 'success' or 'failure'."})
+                messages.append({"role": "user", "content": f"Failed: {str(e)}. Please try again and ensure ALL strategies have a reflection."})
                 
-        return scores_map
+        return reflections_map
+
+    def _synthesize_strategy_trends(self, followed_strats):
+        valid_strats = []
+        strategies_data_text = ""
+        
+        for s in followed_strats:
+            # We fetch it freshly from store to ensure we have the newly pushed reflection
+            strat_obj = self.strategy_store.get_strategy(s['id'])
+            if not strat_obj or not strat_obj.get("recent_reflections"):
+                continue
+                
+            reflections_text = ""
+            for idx, obs in enumerate(strat_obj["recent_reflections"]):
+                reflections_text += f"{idx+1}. {obs}\n"
+                
+            strategies_data_text += (
+                f"--- Strategy ID: {strat_obj['id']} ---\n"
+                f"Title: {strat_obj['title']}\n"
+                f"Strategic Reasoning: {strat_obj['strategic_reasoning']}\n"
+                f"Tactical Guidance: {strat_obj['tactical_guidance']}\n"
+                f"Recent Reflections:\n{reflections_text}\n\n"
+            )
+            valid_strats.append(strat_obj['id'])
+            
+        if not valid_strats:
+            return
+            
+        messages = [
+            {'role': 'system', 'content': "You are an expert game strategist evaluating the trend of multiple strategies."},
+            {'role': 'user', 'content': STRATEGY_TREND_SYNTHESIS_PROMPT.format(
+                strategies_data=strategies_data_text.strip()
+            )}
+        ]
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            responses, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+            raw_response = responses[0]
+            stripped_response = strip_thinking_block(raw_response)
+            
+            try:
+                parsed_json = extract_json_block(stripped_response)
+                trends = parsed_json.get("trends", [])
+                
+                processed_ids = set()
+                for t in trends:
+                    s_id = t.get("strategy_id")
+                    summary = t.get("recent_execution_log", "").strip()
+                    if s_id and summary:
+                        self.strategy_store.update_execution_log(s_id, summary)
+                        processed_ids.add(s_id)
+                        
+                log_dir = os.path.dirname(self.strategy_store_path)
+                if log_dir and log_dir != '/dev/null':
+                    s_log_file = os.path.join(log_dir, f"{self.agent_name}_strategy_processing.log")
+                    try:
+                        with open(s_log_file, "a") as f:
+                            f.write("=== STRATEGY TREND SYNTHESIS (BATCHED) ===\n")
+                            f.write(f"PROMPT:\n{messages[1]['content']}\n")
+                            f.write(f"RAW ANSWER:\n{raw_response}\n")
+                            f.write(f"STRIPPED ANSWER:\n{stripped_response}\n")
+                            f.write("========================\n\n")
+                    except Exception as e:
+                        self.logger.error(f"Failed to write to strategy processing log: {e}")
+                        
+                missing = set(valid_strats) - processed_ids
+                if missing:
+                    raise ValueError(f"Missing execution logs for strategy IDs: {missing}")
+                    
+                break
+            except Exception as e:
+                self.logger.warning(f"Failed to parse batched strategy execution logs on attempt {attempt+1}: {str(e)}")
+                messages.append({"role": "assistant", "content": raw_response})
+                messages.append({"role": "user", "content": f"Failed: {str(e)}. Please try again and ensure ALL strategies have a recent_execution_log."})
 
     def _merge_new_strategies(self, new_strats_with_scores):
         if not new_strats_with_scores:
@@ -1043,7 +1152,7 @@ class ProactiveQueryAgent(PromptAgent):
         new_strats_text = ""
         for idx, (s, score, utility) in enumerate(new_strats_with_scores):
             temp_id = f"temp_new_{idx}"
-            new_strats_text += f"ID: {temp_id}\nTitle: {s['title']}\nScore: {score}\nDefinition: {s['definition']}\n\n"
+            new_strats_text += f"ID: {temp_id}\nTitle: {s['title']}\nScore: {score}\nReasoning: {s['strategic_reasoning']}\nGuidance: {s['tactical_guidance']}\n\n"
             
         messages = [
             {'role': 'system', 'content': "You are an expert game strategist managing a database of strategies."},
@@ -1098,19 +1207,23 @@ class ProactiveQueryAgent(PromptAgent):
                 messages.append({"role": "assistant", "content": raw_response})
                 messages.append({"role": "user", "content": "Failed to parse JSON. Please try again with valid JSON format."})
                 
-        for idx, (s, score, utility) in enumerate(new_strats_with_scores):
+        new_merged_strats = []
+        for idx, (s, obs, utility) in enumerate(new_strats_with_scores):
             temp_id = f"temp_new_{idx}"
             if temp_id in kept_ids or not kept_ids:
                 new_id = self.strategy_store.add_strategy(
                     title=s["title"],
-                    definition=s["definition"],
-                    success_criteria=s["success_criteria"],
-                    # neutral_criteria=s.get("neutral_criteria", ""),
-                    failure_criteria=s["failure_criteria"]
+                    strategic_reasoning=s["strategic_reasoning"],
+                    tactical_guidance=s["tactical_guidance"],
+                    desired_post_game_reflection=s["desired_post_game_reflection"]
                 )
-                self.strategy_store.update_score(new_id, score)
+                self.strategy_store.add_reflection(new_id, obs)
                 self.strategy_store.update_utility(new_id, utility)
-            
+                new_merged_strats.append(self.strategy_store.get_strategy(new_id))
+                
+        # Generate the initial Recent Execution Log for the newly saved strategies
+        if new_merged_strats:
+            self._synthesize_strategy_trends(new_merged_strats)
     def _run_phase_a(self, opponent_key, q_log, gh, game_rules):
         """
         Phase A: Propose new stats per game.
@@ -1677,7 +1790,13 @@ class ProactiveQueryAgent(PromptAgent):
         
         parsed = extract_json_block(strip_thinking_block(resp[0]))
         
-        finalized = { upd.get("question"): upd for upd in parsed.get("finalized_memories", []) }
+        finalized = {}
+        for upd in parsed.get("finalized_memories", []):
+            qid_str = upd.get("question_id", "")
+            match = re.search(r'\[Question\s+(\d+)\]', qid_str, re.IGNORECASE)
+            if match:
+                idx = int(match.group(1))
+                finalized[idx] = upd
         
         for i, m_info in mem_map.items():
             draft = m_info["draft"]
@@ -1686,7 +1805,7 @@ class ProactiveQueryAgent(PromptAgent):
             q = draft.get("question")
             content = ""
             
-            upd = finalized.get(q)
+            upd = finalized.get(i)
             evict_ids = []
             if upd:
                 if upd.get("update") and upd.get("new_content"):
@@ -1788,6 +1907,9 @@ class ProactiveQueryAgent(PromptAgent):
             global_desired_infos = []
             for res in per_game_results.values():
                 for p in res["stat_proposals"]:
+                    q_text = p.get("question", "")
+                    if q_text:
+                        p["question"] = re.sub(r'(?i)\s*desired\s+(?:additional\s+)?info.*', '', q_text, flags=re.DOTALL).strip()
                     mem_id = p.get("memory_id")
                     if mem_id:
                         mem = self.store.get_memory(target_key, mem_id)

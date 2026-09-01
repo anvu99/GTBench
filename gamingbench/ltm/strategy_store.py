@@ -14,17 +14,18 @@ class StrategyStore:
         # Structure: { strategy_id: { id, title, definition, success_criteria, neutral_criteria, failure_criteria, success_count, neutral_count, failure_count, total_score, created_at } }
         self.strategies: Dict[str, Dict[str, Any]] = {}
 
-    def add_strategy(self, title: str, definition: str, success_criteria: str, failure_criteria: str) -> str:
+    def add_strategy(self, title: str, strategic_reasoning: str, tactical_guidance: str, desired_post_game_reflection: str) -> str:
         """Adds a new strategy and returns its generated ID."""
         strategy_id = f"strat_{uuid.uuid4().hex[:8]}"
         
         self.strategies[strategy_id] = {
             "id": strategy_id,
             "title": title,
-            "definition": definition,
-            "success_criteria": success_criteria,
-            # "neutral_criteria": neutral_criteria,
-            "failure_criteria": failure_criteria,
+            "strategic_reasoning": strategic_reasoning,
+            "tactical_guidance": tactical_guidance,
+            "desired_post_game_reflection": desired_post_game_reflection,
+            "recent_reflections": [],
+            "recent_execution_log": "No execution data yet. This strategy has not been tested.",
             "success_count": 0,
             # "neutral_count": 0,
             "failure_count": 0,
@@ -74,12 +75,42 @@ class StrategyStore:
         strat["average_utility"] = strat["total_utility"] / strat["uses_count"]
         return True
 
+    def add_reflection(self, strategy_id: str, reflection: str, max_queue_size: int = 5) -> bool:
+        """Pushes a new reflection observation to the FIFO queue."""
+        strat = self.get_strategy(strategy_id)
+        if not strat:
+            return False
+            
+        if "recent_reflections" not in strat:
+            strat["recent_reflections"] = []
+            
+        strat["recent_reflections"].insert(0, reflection)
+        if len(strat["recent_reflections"]) > max_queue_size:
+            strat["recent_reflections"].pop()
+        return True
+        
+    def update_execution_log(self, strategy_id: str, summary: str) -> bool:
+        """Updates the recent_execution_log string."""
+        strat = self.get_strategy(strategy_id)
+        if not strat:
+            return False
+            
+        strat["recent_execution_log"] = summary
+        return True
+
     def get_top_k_by_score(self, top_k: int = 6) -> List[Dict[str, Any]]:
         """Returns the top-k strategies sorted by their average_utility (descending)."""
         strats = self.get_all()
         # Sort by average_utility descending, then by created_at descending (newest first for ties)
         strats.sort(key=lambda s: (s.get("average_utility", 0.0), s.get("created_at", 0)), reverse=True)
         return strats[:top_k]
+        
+    def get_bottom_k_by_utility(self, k: int = 3) -> List[Dict[str, Any]]:
+        """Returns the bottom-k strategies sorted by average_utility (ascending) to use as anti-patterns."""
+        strats = [s for s in self.get_all() if s.get("uses_count", 0) > 0]
+        # Sort ascending by average utility
+        strats.sort(key=lambda s: (s.get("average_utility", 0.0), -s.get("created_at", 0)))
+        return strats[:k]
 
     def get_mixed_top_k(self, top_score_k: int = 4, top_recent_k: int = 2) -> List[Dict[str, Any]]:
         """Returns top_score_k strategies by score, plus top_recent_k strategies by recency."""

@@ -181,11 +181,11 @@ CRITICAL RULES:
 - TIP: Your stat pseudocode will be persistent and used by the agent to update the stat in future games. Use logical conditions using the trajectory tags as your variables (e.g., `[Move] Opponent`, `Round X`, `<Y dices, Z value>`). The pseudocode should be easy to read and understand. It MUST be a single string (do NOT use nested JSON objects or lists for the pseudocode).
 - TIP: Each stat type has a fundamental, simple data structure that strictly limits what it can store. Grouping a complex analysis into a single stat will fail. If you need to answer a complex question, break it down and use multiple simple stats that combining them will help you answer the question instead.
 1. For `proposed_stats`, you may propose up to {max_stats_per_memory} trackers per query. The `type` MUST be one of:
-   - COUNT: Tracks total occurrences of an event. (Data structure: simple `n` counter. Pseudocode MUST define a boolean `condition` to count).
-   - RATE: Tracks a percentage. (Data structure: `count` and `total` counters. Pseudocode MUST define a boolean `trigger_condition` for when the denominator increments, and a boolean `success_condition` for when the numerator increments).
-   - MEAN_VAR: Tracks average and variance. (Data structure: `n`, `sum`, and `sum_sq` counters. Pseudocode MUST define the `target_value` to extract).
-   - DISTRIBUTION: Tracks a histogram. (Data structure: `buckets` dictionary mapping string categories to counts. Pseudocode MUST define the `category_key` to extract).
-   - EXTREMUM: Tracks max/min bounds. (Data structure: `max` and `min` values. Pseudocode MUST define the `target_value` to extract).
+   - COUNT: Tracks total occurrences of an event. (Data structure: simple `n` counter. Pseudocode MUST define a boolean `condition` to evaluate and explicitly instruct to update n).
+   - RATE: Tracks a percentage. (Data structure: `count` and `total` counters. Pseudocode MUST define a boolean `trigger_condition` and a boolean `success_condition`, and explicitly instruct to update count and total).
+   - MEAN_VAR: Tracks average and variance. (Data structure: `n`, `sum`, and `sum_sq` counters. Pseudocode MUST define the `target_value` to extract and explicitly instruct to update n, sum, and sum_sq).
+   - DISTRIBUTION: Tracks a histogram. (Data structure: `buckets` dictionary mapping string categories to counts. Pseudocode MUST define the `category_key` to extract and explicitly instruct to update the buckets dictionary).
+   - EXTREMUM: Tracks max/min bounds. (Data structure: `max` and `min` values. Pseudocode MUST define the `target_value` to extract and explicitly instruct to update max and min).
 
 Output exactly in strict JSON format:
 ```json
@@ -414,7 +414,7 @@ Output exactly in strict JSON format:
 {{
   "finalized_memories": [
     {{
-      "question": "<the question>",
+      "question_id": "[Question X]",
       "update": true,
       "new_content": "<your concise 1-4 sentence answer incorporating the exact numbers>",
       "evict_stat_ids": ["<stat_id>"]
@@ -431,14 +431,14 @@ Based on your observation of the current game state, the following strategic ins
 
 {retrieved_memories}
 
-Use these insights to anticipate the other player's behavior and inform your next strategic action. Pay special attention to any quantified stats (e.g., frequencies, rates) provided to accurately assess risk and probabilities.
+Use these insights to anticipate the other player's behavior and inform your next strategic action. 
 ===========================
 """
 
 # Injection prompt specifically for ProactiveQueryAgent to inject into the step/chat prompt
 PROACTIVE_INJECTION_BLOCK = """\
-=== STRATEGIC MEMORY INJECTION ===
-You asked the following questions this round. Use these insights to anticipate the other player's behavior and inform your next strategic action. Pay special attention to any quantified stats (e.g., frequencies, rates) provided to accurately assess risk and probabilities.
+=== OPPONENT REPUTATION MEMORY ===
+You asked the following questions this round. Use these insights to anticipate the other player's behavior and inform your next strategic action. 
 
 {question_blocks}
 =================================="""
@@ -446,7 +446,7 @@ You asked the following questions this round. Use these insights to anticipate t
 IN_GAME_ASSESSMENT_SUFFIX = """
 
 ---
-After your action or chat, append a JSON block assessing each of the questions labeled in the STRATEGIC MEMORY INJECTION above, AND declaring the strategy you are employing.
+After your action or chat, append a JSON block assessing each of the questions labeled in the OPPONENT REPUTATION MEMORY above, AND declaring the strategy you are employing.
 
 For [DIRECT RETRIEVAL] questions: output only `desired_additional_info`.
 For [NEW QUESTION] questions: output `answered`, `memory_conclusion`, `driving_memory_id`, `desired_additional_info`.
@@ -456,9 +456,9 @@ Field definitions:
 - `memory_conclusion`: (string) if answered=true, write the actual answer you derived from the memories. If answered=false, write a brief 1-2 sentence reason why the memories fell short.
 - `driving_memory_id`: (string or null) if answered=true, provide the exact ID (e.g. "mem_1234") of the specific memory that helped you answer it. If answered=false, this MUST be null.
 - `desired_additional_info`: (string) This field is strictly for requesting what is still missing to fully answer the specific question you asked, or a more detailed answer that falls entirely within the exact scope of the original question. The underlying stats automatically update with more games, so DO NOT ask for a larger sample size. **CRITICAL:** Do NOT expand the scope of the original question or ask about different scenarios. If you want to explore different conditions, you must ask a completely NEW question next round instead of polluting this memory. Leave empty ("") if the current memory structure is sufficient.
-- `definition`: (string) A detailed explanation of the strategy. It MUST clearly articulate the specific tactical action to be taken, the underlying intent/reason, AND the target outcome it is trying to achieve. Make the strategy description reusable; only include specific state information (like specific cards, private valuation, specific rounds,...) if that is a key component driving when to use the strategy.
-- `success_criteria`: (string) Describe the EXPECTED SUCCESSFUL OUTCOME of this strategy. Write it as a description of what the game state will look like if everything goes right (e.g., "The other player responds as anticipated (e.g., falling for a bluff, or correctly interpreting a hint), allowing us to maximize utility"). The successful outcome MUST ultimately correlate with maximizing expected utility or achieving a positive payoff. Do not describe an outcome as a 'success' if it results in sub-optimal utility. MUST be objectively verifiable by an observer reading the CURRENT game trajectory after it finishes.
-- `failure_criteria`: (string) Describe the ANTICIPATED FAILURE OUTCOME of this strategy. Write it as a description of how this strategy could backfire, fail due to the other player's unexpected actions, or go wrong (e.g., "The other player anticipates our maximum bid and outbids us, or misinterprets our hint and discards a critical card"). MUST be objectively verifiable by an observer reading the CURRENT game trajectory after it finishes.
+- `strategic_reasoning`: (string) The psychological or game-theory rationale behind why this strategy works and what vulnerabilities it exploits.
+- `tactical_guidance`: (string) The actionable, abstract steps to take when employing this strategy. Must be written as general guidance rather than rigid rules, and must NOT contain specific item names or hardcoded point values.
+- `desired_post_game_reflection`: (string) What specific outcomes, opponent reactions, or metrics you want the post-game system to check when evaluating how well this strategy worked (e.g., "Check if the opponent accepted the bluff immediately or if they counter-offered. Track how many points they conceded.").
 
 Output exactly in strict JSON format. Your output must be a single JSON object containing a "strategy" object, an "assessments" array AND a "working_memory" string.
 
@@ -466,7 +466,7 @@ Your "strategy" object MUST be either a "follow" strategy or a "new" strategy.
 If you are following an existing strategy from the STRATEGY MEMORY, output:
 "strategy": { "type": "follow", "strategy_id": "<the strat_id>" }
 If you are trying a completely new strategy, output:
-"strategy": { "type": "new", "title": "<name>", "definition": "<details>", "success_criteria": "<conditions>", "failure_criteria": "<conditions>" }
+"strategy": { "type": "new", "title": "<name>", "strategic_reasoning": "<rationale>", "tactical_guidance": "<steps>", "desired_post_game_reflection": "<reflection_goals>" }
 
 Example:
 ```json
@@ -498,7 +498,7 @@ Example:
 IN_GAME_ASSESSMENT_SUFFIX_NO_STRATEGY = """
 
 ---
-After your action or chat, append a JSON block assessing each of the questions labeled in the STRATEGIC MEMORY INJECTION above.
+After your action or chat, append a JSON block assessing each of the questions labeled in the OPPONENT REPUTATION MEMORY above.
 
 For [DIRECT RETRIEVAL] questions: output only `desired_additional_info`.
 For [NEW QUESTION] questions: output `answered`, `memory_conclusion`, `driving_memory_id`, `desired_additional_info`.
@@ -536,32 +536,58 @@ Example:
 
 STRATEGY_INJECTION_BLOCK = """\
 === STRATEGY MEMORY ===
-Top strategies you have used in past games (ranked by performance). 
-(TIP: 'Avg Utility' is the empirical average score earned when this strategy was applied in past games, and 'Games' is how many times it has been tested. If a strategy's description seems compatible and followable given your current game state, you are encouraged to follow the one with the highest Avg Utility. If none of the listed strategies feel like a good fit, or if you believe a novel approach could exceed the Avg Utility of the relevant strategies, you are also encouraged to create a new one instead.)
+Your record of past strategies. Use the Avg Utility and Recent Execution Log to judge each strategy's real-world performance, then decide: follow a working strategy, or create a new one to fix what is failing or fill the gaps of existing strategies.
 
-{top_strategies}
+Field definitions:
+- Avg Utility: empirical average score earned each time this strategy was applied. This score is calculated exactly as defined in the game rules (e.g., your net chips, profit, or final cooperative score).
+- Games: total number of times this strategy has been tested.
+- Reasoning: the strategic rationale behind this strategy.
+- Action: the concrete steps to take when following this strategy.
+- Recent Execution Log: concrete observations from the last few uses of the strategy.
+
+{strategy_list}
 ======================
 """
 
-STRATEGY_SCORING_PROMPT = """
-You are reviewing a completed game to evaluate the effectiveness of the strategies you employed.
+STRATEGY_REFLECTION_EXTRACTION_PROMPT = """
+You are reviewing a completed game to extract concise observations about the effectiveness of the strategies you employed.
 
-Here are the strategies you attempted during this game (along with their scoring criteria):
-{strategies_to_score}
+Here are the strategies you attempted during this game, along with the specific post-game reflections they requested:
+{strategies_to_reflect}
 
 Here is the full game trajectory:
 {game_trajectory}
 
-Your task is to evaluate each strategy based STRICTLY on its own defined success and failure criteria.
+Your task is to review the trajectory and write a concise diagnostic observation for each strategy that answers the 'Desired Reflection'. 
 
 Output exactly in strict JSON format:
 ```json
 {{
-  "scores": [
+  "reflections": [
     {{
       "strategy_id": "<strategy_id_or_temp_key>",
-      "score": "<must be exactly one of: success, failure>",
-      "rationale": "<brief 1-2 sentence explanation of why this score was assigned based on the game events>"
+      "reflection_observation": "<Concise 2-3 sentence diagnostic observation>"
+    }}
+  ]
+}}
+```
+"""
+
+STRATEGY_TREND_SYNTHESIS_PROMPT = """
+You are reviewing the recent usage history of multiple strategies to generate concise summaries of their current trends.
+
+Here are the strategies and their recent reflections:
+{strategies_data}
+
+Your task is to synthesize the recent reflections for EACH strategy into a 1-2 sentence summary that tells a future agent exactly what happens when this strategy is applied and whether it should be trusted.
+
+Output exactly in strict JSON format:
+```json
+{{
+  "trends": [
+    {{
+      "strategy_id": "<strategy_id>",
+      "recent_execution_log": "<your 1-2 sentence summary>"
     }}
   ]
 }}
