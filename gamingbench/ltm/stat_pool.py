@@ -120,15 +120,25 @@ class StatPool:
             storage = stat["storage"]
             stat_type = stat["type"]
 
+        def _safe_int(val):
+            if val is None: return 0
+            try: return int(val)
+            except (ValueError, TypeError): return 0
+
+        def _safe_float(val):
+            if val is None: return 0.0
+            try: return float(val)
+            except (ValueError, TypeError): return 0.0
+
         if stat_type == "COUNT":
-            storage["n"] += int(deltas.get("n", 0))
+            storage["n"] += _safe_int(deltas.get("n", 0))
         elif stat_type == "RATE":
-            storage["count"] += int(deltas.get("count", 0))
-            storage["total"] += int(deltas.get("total", 0))
+            storage["count"] += _safe_int(deltas.get("count", 0))
+            storage["total"] += _safe_int(deltas.get("total", 0))
         elif stat_type == "MEAN_VAR":
-            storage["sum"] += float(deltas.get("sum", 0.0))
-            storage["sum_sq"] += float(deltas.get("sum_sq", 0.0))
-            storage["n"] += int(deltas.get("n", 0))
+            storage["sum"] += _safe_float(deltas.get("sum", 0.0))
+            storage["sum_sq"] += _safe_float(deltas.get("sum_sq", 0.0))
+            storage["n"] += _safe_int(deltas.get("n", 0))
         elif stat_type == "DISTRIBUTION":
             buckets_delta = deltas.get("buckets", {})
             for k, v in buckets_delta.items():

@@ -74,8 +74,8 @@ Based on the current observation, please do TWO things:
 CRITICAL RULES FOR FORMULATING YOUR QUESTIONS:
 - TIP: These questions are the ONLY way you can retrieve information from your large player profile database. Think of what information you want to know about your peers that can help you improve your strategy and maximize utility. Generate questions that are clear and direct to get the exact information you want.
 - You are formulating queries to search a historical DATABASE about your peers. You are NOT speaking to the peers directly. Do not address them as "you".
-- Ask specifically about your peers by their direct names (e.g., Player 1, Player 2). 
-- You can formulate questions about their specific expertise or specialization fields to better allocate tasks and collaborate (e.g., "What is Player 1's specialization?", "How often does Player 2 answer Math questions correctly?").
+- Ask specifically about your peers by their direct names (e.g., Spoke 1, Spoke 2). 
+- You can formulate questions about their specific expertise or specialization fields to better allocate tasks and collaborate (e.g., "What is Spoke 1's specialization?", "How often does Spoke 2 answer Math questions correctly?").
 - DO NOT ask abstract or general game theory questions.
 - CRITICAL: The database only stores objective information that can be perceived post-game from the game trajectory. DO NOT ask for subjective advice, strategies, or instructions on how you should play (e.g., "What should I do?"). You CAN ask for measurable outcomes of specific actions.
 - For each question, if it is semantically the same as one of the top-performing questions above, you are strongly encouraged to copy it exactly for best retrieval. Set source_memory_id to its exact memory ID (e.g., "mem_abc123"). 

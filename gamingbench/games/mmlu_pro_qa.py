@@ -27,6 +27,31 @@ def _strip_thinking(text: str) -> str:
     text = re.sub(r'^.*?</think>\s*', '', text, flags=re.DOTALL)
     return text.strip()
 
+_main_pattern = re.compile(r'(?i)(?:final answer|correct answer|correct option|correct choice|correct selection|final selection|result|matches option|answer|most likely diagnosis|correct interpretation)[\*:\s]*(?:is\s*)?[\*:\s]*([A-J])(?:[^\w]|$)')
+_fallback_pattern1 = re.compile(r'(?i)\b(?:option|choice)\s+\**([A-J])\**\b')
+_fallback_pattern2 = re.compile(r'(?i)(?:^|\n)\s*\**([A-J])\**\s*:')
+_fallback_pattern3 = re.compile(r'(?i)\**([A-J])\**\s*:')
+
+def _extract_final_answer(raw_reasoning: str) -> str:
+    match = _main_pattern.search(raw_reasoning)
+    if match:
+        return match.group(1).upper()
+        
+    tail = raw_reasoning[-400:]
+    f_match1 = _fallback_pattern1.findall(tail)
+    if f_match1:
+        return f_match1[-1].upper()
+        
+    f_match2 = _fallback_pattern2.findall(tail)
+    if f_match2:
+        return f_match2[-1].upper()
+        
+    f_match3 = _fallback_pattern3.findall(tail)
+    if f_match3:
+        return f_match3[-1].upper()
+        
+    return "Unknown"
+
 class MmluProQA:
     _dataset = None
     _cache = None
@@ -182,7 +207,8 @@ class MmluProQA:
                 answer = spoke_answers[expert]
                 raw = answer.get('raw_reasoning', '')
                 cleaned = _strip_thinking(raw)
-                board_str += f"--- Spoke {spoke_idx} ---\n{cleaned}\n\n"
+                extracted_ans = _extract_final_answer(cleaned)
+                board_str += f"--- Spoke {spoke_idx} ---\n{cleaned}\n\n[Spoke {spoke_idx} Final Answer]: {extracted_ans}\n\n"
             
         legal_moves = [f"<{chr(65+i)}>" for i in range(len(options))]
         

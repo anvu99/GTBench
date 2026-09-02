@@ -54,6 +54,8 @@ def get_args():
                         help='Enable strategy memory for ProactiveQueryAgent. When absent, only the proactive query store is used.')
     parser.add_argument('--use-proactive-memory', default=False, action='store_true',
                         help='Enable proactive memory for ProactiveQueryAgent.')
+    parser.add_argument('--resume', default=False, action='store_true',
+                        help='Resume from existing experiment directory based on jsonl line count.')
     args = parser.parse_args()
 
     return args
@@ -194,7 +196,7 @@ def _get_memory_snapshot(agent):
     elif hasattr(agent, 'store') and hasattr(agent.store, 'evidence'):
         return {
             'evidence': copy.deepcopy(agent.store.evidence),
-            'memories': copy.deepcopy(agent.store.memories)
+            'memories': copy.deepcopy(agent.store.memories) 
         }
     return {}
 
@@ -293,7 +295,11 @@ def run_game(game_name):
     logger = utils.LLMBenchLogger(log_path)
     result_path = os.path.join(log_root, run_name + '.jsonl')
 
-    if not os.path.exists(result_path):
+    start_match_idx = 0
+    if getattr(args, 'resume', False) and os.path.exists(result_path):
+        with open(result_path, 'r') as f:
+            start_match_idx = sum(1 for _ in f)
+    elif not os.path.exists(result_path):
         file = open(result_path, 'w')
         file.close()
 
@@ -374,7 +380,7 @@ def run_game(game_name):
                     seen_store_paths.add(store_path)
                     batch_agents.append(a)
         results = []
-        for batch_start in range(0, args.num_matches, batch_size):
+        for batch_start in range(start_match_idx, args.num_matches, batch_size):
             batch_end = min(batch_start + batch_size, args.num_matches)
             batch_q = queue.Queue()  # thread-safe gradient data collector
 
@@ -467,7 +473,7 @@ def run_game(game_name):
 
     elif args.num_workers == 1:
         results = []
-        for match_idx in range(args.num_matches):
+        for match_idx in range(start_match_idx, args.num_matches):
             if getattr(args, 'exchange_first_player', False) and match_idx % 2 == 1:
                 match_agents = [copy.deepcopy(agents[1]), copy.deepcopy(agents[0])]
                 match_models = [models[1], models[0]]
@@ -488,7 +494,7 @@ def run_game(game_name):
             results.append(run_match(match_arg))
     else:
         match_arg_list = []
-        for match_idx in range(args.num_matches):
+        for match_idx in range(start_match_idx, args.num_matches):
             if getattr(args, 'exchange_first_player', False) and match_idx % 2 == 1:
                 match_agents = [copy.deepcopy(agents[1]), copy.deepcopy(agents[0])]
                 match_models = [models[1], models[0]]
@@ -745,7 +751,11 @@ def run_game_nplayer(game_name):
     logger = utils.LLMBenchLogger(log_path)
     result_path = os.path.join(log_root, run_name + '.jsonl')
 
-    if not os.path.exists(result_path):
+    start_match_idx = 0
+    if getattr(args, 'resume', False) and os.path.exists(result_path):
+        with open(result_path, 'r') as f:
+            start_match_idx = sum(1 for _ in f)
+    elif not os.path.exists(result_path):
         with open(result_path, 'w') as file:
             pass
 
@@ -790,17 +800,17 @@ def run_game_nplayer(game_name):
         batch_agents = []
         for a in agents:
             if hasattr(a, 'flush_batch_updates'):
-                store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None)))))
+                store_path = _get_agent_store_path(a)
                 if store_path and store_path not in seen_store_paths:
                     seen_store_paths.add(store_path)
                     batch_agents.append(a)
         results = []
-        for batch_start in range(0, args.num_matches, batch_size):
+        for batch_start in range(start_match_idx, args.num_matches, batch_size):
             batch_end = min(batch_start + batch_size, args.num_matches)
             batch_q = queue.Queue()  # thread-safe gradient data collector
 
             memory_snapshots = {
-                getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None))))): _get_memory_snapshot(a) 
+                _get_agent_store_path(a): _get_memory_snapshot(a) 
                 for a in batch_agents
             }
 
@@ -809,7 +819,7 @@ def run_game_nplayer(game_name):
                 fresh_agents = []
                 for a in agents:
                     if hasattr(a, 'flush_batch_updates'):
-                        store_path = getattr(a, 'ew_store_path', getattr(a, 'sw_store_path', getattr(a, 'ltm_store_path', getattr(a, 'rules_store_path', getattr(a, 'memory_bank_path', None)))))
+                        store_path = _get_agent_store_path(a)
                         snap = memory_snapshots.get(store_path, _get_memory_snapshot(a))
                         fresh_agents.append(clone_agent_for_batch(a, snap))
                     else:
@@ -876,7 +886,7 @@ def run_game_nplayer(game_name):
                     if not getattr(batch_agent, 'current_game_intro', None):
                         # game config is not easily accessible here? We need game.config
                         batch_agent.current_game_intro = construct_game_intro(game_name, game_config=game.config)
-                    store_path = getattr(batch_agent, 'ew_store_path', getattr(batch_agent, 'sw_store_path', getattr(batch_agent, 'ltm_store_path', getattr(batch_agent, 'rules_store_path', getattr(batch_agent, 'memory_bank_path', None)))))
+                    store_path = _get_agent_store_path(batch_agent)
                     
                     if store_path in flushed_paths:
                         continue
@@ -887,7 +897,7 @@ def run_game_nplayer(game_name):
                         batch_agent.flush_batch_updates(agent_data)
 
     elif args.num_workers == 1:
-        for match_idx in range(args.num_matches):
+        for match_idx in range(start_match_idx, args.num_matches):
             if getattr(args, 'exchange_first_player', False):
                 import itertools
                 perms = list(itertools.permutations(range(num_players)))
@@ -916,7 +926,7 @@ def run_game_nplayer(game_name):
             run_match_nplayer(match_arg)
     else:
         params_list = []
-        for match_idx in range(args.num_matches):
+        for match_idx in range(start_match_idx, args.num_matches):
             if getattr(args, 'exchange_first_player', False):
                 import itertools
                 perms = list(itertools.permutations(range(num_players)))
