@@ -56,6 +56,8 @@ def get_args():
                         help='Enable proactive memory for ProactiveQueryAgent.')
     parser.add_argument('--resume', default=False, action='store_true',
                         help='Resume from existing experiment directory based on jsonl line count.')
+    parser.add_argument('--in-game-obs', default=False, action='store_true',
+                        help='Enable in-game observation tracking for SlidingWindowAgent.')
     args = parser.parse_args()
 
     return args
@@ -328,6 +330,8 @@ def run_game(game_name):
             a.use_strategy_memory = getattr(args, 'use_strategy_memory', False)
         if hasattr(a, 'use_proactive_memory'):
             a.use_proactive_memory = getattr(args, 'use_proactive_memory', False)
+        if hasattr(a, 'in_game_obs_mode'):
+            a.in_game_obs_mode = getattr(args, 'in_game_obs', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -775,6 +779,8 @@ def run_game_nplayer(game_name):
             a.use_strategy_memory = getattr(args, 'use_strategy_memory', False)
         if hasattr(a, 'use_proactive_memory'):
             a.use_proactive_memory = getattr(args, 'use_proactive_memory', False)
+        if hasattr(a, 'in_game_obs_mode'):
+            a.in_game_obs_mode = getattr(args, 'in_game_obs', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 

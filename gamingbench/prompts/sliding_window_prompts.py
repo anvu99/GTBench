@@ -30,3 +30,29 @@ Each game history below uses the same full Match Ground Truth format:
 Based on these {n} recent games, write an updated Opponent Reputation Note.
 This note should store insights you have perceived about the opponent — their behavioral tendencies, patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
 """
+
+SW_OBS_GENERATION_SUFFIX = """\
+Additionally, after your move, write a concise in-game observation inside <obs>...</obs> tags.
+Summarize what you have observed about your opponent's strategy and behavior so far in THIS game.
+Keep it under 5 sentences. This observation will carry forward to your next turn."""
+
+SW_OBS_INJECTION_PROMPT = """\
+=== YOUR IN-GAME OBSERVATION (This Game) ===
+This is your own running observation about your opponent, updated from previous turns in this game.
+Use it to reason about their current strategy.
+
+{in_game_obs}
+=== END IN-GAME OBSERVATION ==="""
+
+SW_OBS_FINAL_REFINEMENT_PROMPT = """\
+You just finished a game of {game_name}.
+
+--- YOUR RUNNING IN-GAME OBSERVATION ---
+{in_game_obs}
+
+--- FULL GAME TRAJECTORY ---
+{game_history}
+
+Based on the complete trajectory, write a final refined observation about your opponent.
+Focus on their behavioral tendencies, patterns, and hidden intent.
+Keep it concise (under 10 sentences)."""

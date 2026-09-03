@@ -22,6 +22,9 @@ class SlidingWindowAgent(PromptAgent):
         # Batch mode variables
         self.batch_mode: bool = False
         self._last_batch_result = None  # Stores raw game_history string
+        
+        self.in_game_obs_mode: bool = False
+        self.in_game_obs: str | None = None
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align SW storage with the run's experiment folder."""
@@ -44,6 +47,8 @@ class SlidingWindowAgent(PromptAgent):
             self.game_count = 0
         self.game_count += 1
         
+        self.in_game_obs = None
+        
         # We don't care about opponent_key for SW, but we need the game name.
         # Since game_intro doesn't strictly have game_name isolated easily, 
         # we'll extract it from the env_name in step or post_game_update.
@@ -62,16 +67,60 @@ class SlidingWindowAgent(PromptAgent):
         if not current_notes and obs_env != env_name:
             current_notes = self.sw_store.get(obs_env)
             
+        from gamingbench.prompts.observation_prompts import construct_game_intro
+        
         if current_notes:
             sw_injection = SW_INJECTION_PROMPT.format(
                 game_name=env_name,
                 notes_text=current_notes
             )
-            from gamingbench.prompts.observation_prompts import construct_game_intro
             game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
             observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
             
+        if getattr(self, 'in_game_obs_mode', False) and getattr(self, 'in_game_obs', None):
+            from gamingbench.prompts.sliding_window_prompts import SW_OBS_INJECTION_PROMPT
+            obs_block = SW_OBS_INJECTION_PROMPT.format(in_game_obs=self.in_game_obs)
+            
+            if current_notes:
+                target = game_intro + "\n\n" + sw_injection
+            else:
+                target = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
+                
+            observation_prompt = observation_prompt.replace(target, target + "\n\n" + obs_block, 1)
+            
         return system_prompt, observation_prompt
+
+    def step(self, observations):
+        original_constructor = self.step_prompt_constructor
+        
+        def wrapped_constructor(obs):
+            instruct = original_constructor(obs).copy()
+            if getattr(self, 'in_game_obs_mode', False):
+                from gamingbench.prompts.sliding_window_prompts import SW_OBS_GENERATION_SUFFIX
+                instruct['prompt'] += "\n\n" + SW_OBS_GENERATION_SUFFIX
+            return instruct
+            
+        self.step_prompt_constructor = wrapped_constructor
+        
+        original_llm_query = self.llm_query
+        
+        def wrapped_llm_query(messages, n=1, stop=None, prompt_type='move'):
+            responses, query = original_llm_query(messages, n, stop, prompt_type)
+            if getattr(self, 'in_game_obs_mode', False):
+                import re
+                match = re.search(r'<obs>(.*?)</obs>', responses[0], re.DOTALL)
+                if match:
+                    self.in_game_obs = match.group(1).strip()
+                    self.logger.info(f"[In-Game Obs] Parsed:\n{self.in_game_obs}")
+            return responses, query
+            
+        self.llm_query = wrapped_llm_query
+        
+        try:
+            return super().step(observations)
+        finally:
+            self.step_prompt_constructor = original_constructor
+            self.llm_query = original_llm_query
 
     def post_game_update(self, game_history: str, final_board_state: str = "", env_name: str = 'unknown'):
         """Called at the end of the game."""
@@ -82,8 +131,45 @@ class SlidingWindowAgent(PromptAgent):
             self.logger.info('Batch mode: SlidingWindowAgent stored game history, synthesis deferred.')
             return
             
+        if getattr(self, 'in_game_obs_mode', False) and getattr(self, 'in_game_obs', None):
+            game_history = self._refine_final_obs(game_history)
+            
         # If not batch mode, just do it directly.
         self.flush_batch_updates([game_history])
+
+    def _refine_final_obs(self, game_history: str) -> str:
+        """Post-game: refine the running in-game obs using the full trajectory.
+        
+        Result is logged to sw_store_trace.log and returned as the
+        'game_history' string passed to flush_batch_updates.
+        """
+        from gamingbench.prompts.sliding_window_prompts import SW_OBS_FINAL_REFINEMENT_PROMPT
+        from gamingbench.utils.utils import strip_thinking_block
+        
+        prompt = SW_OBS_FINAL_REFINEMENT_PROMPT.format(
+            game_name=self.current_game_name or "unknown",
+            in_game_obs=self.in_game_obs,
+            game_history=game_history
+        )
+        messages = [{"role": "user", "content": prompt}]
+        log_file = self.sw_store_path.replace('.json', '_trace.log')
+        
+        try:
+            generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+            refined = strip_thinking_block(generations[0]).strip()
+            self.logger.info(f"[In-Game Obs] Final refined observation:\n{refined}")
+        except Exception as e:
+            self.logger.error(f"Failed to refine final observation: {e}")
+            refined = self.in_game_obs
+        
+        with open(log_file, 'a') as f:
+            f.write('=== IN-GAME OBS FINAL REFINEMENT ===\n')
+            f.write(f'REFINEMENT PROMPT:\n{prompt}\n\n')
+            f.write(f'RUNNING OBS (pre-refinement):\n{self.in_game_obs}\n\n')
+            f.write(f'REFINED OBS:\n{refined}\n')
+            f.write('=' * 50 + '\n\n')
+        
+        return refined
 
     def flush_batch_updates(self, game_histories: list) -> None:
         """Perform a single unified SW update from a completed batch of N games."""
