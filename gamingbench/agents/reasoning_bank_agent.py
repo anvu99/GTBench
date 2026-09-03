@@ -252,6 +252,7 @@ class ReasoningBankAgent(PromptAgent):
         won = False
         match = re.search(r"Your score=([-\d.]+),\s*Opponent score=([-\d.]+)", game_history)
         coop_match = re.search(r"Cooperative final score = ([-\d.]+)", game_history)
+        single_match = re.search(r"Your score=([-\d.]+)(?!\s*,)", game_history)
         
         if match:
             my_score = float(match.group(1))
@@ -259,6 +260,9 @@ class ReasoningBankAgent(PromptAgent):
             won = (my_score > opp_score)
         elif coop_match:
             score = float(coop_match.group(1))
+            won = score > 0
+        elif single_match:
+            score = float(single_match.group(1))
             won = score > 0
             
         result = {
