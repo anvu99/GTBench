@@ -108,7 +108,9 @@ class SlidingWindowAgent(PromptAgent):
             responses, query = original_llm_query(messages, n, stop, prompt_type)
             if getattr(self, 'in_game_obs_mode', False):
                 import re
-                match = re.search(r'<obs>(.*?)</obs>', responses[0], re.DOTALL)
+                from gamingbench.utils.utils import strip_thinking_block
+                clean_response = strip_thinking_block(responses[0])
+                match = re.search(r'<obs>(.*?)</obs>', clean_response, re.DOTALL)
                 if match:
                     self.in_game_obs = match.group(1).strip()
                     self.logger.info(f"[In-Game Obs] Parsed:\n{self.in_game_obs}")
@@ -121,18 +123,43 @@ class SlidingWindowAgent(PromptAgent):
         finally:
             self.step_prompt_constructor = original_constructor
             self.llm_query = original_llm_query
+    def chat_step(self, observations, chat_history_str: str):
+        original_llm_query = self.llm_query
+        
+        def wrapped_llm_query(messages, n=1, stop=None, prompt_type='move'):
+            if getattr(self, 'in_game_obs_mode', False):
+                from gamingbench.prompts.sliding_window_prompts import SW_OBS_GENERATION_SUFFIX
+                messages[-1]['content'] += "\n\n" + SW_OBS_GENERATION_SUFFIX
+                
+            responses, query = original_llm_query(messages, n, stop, prompt_type)
+            if getattr(self, 'in_game_obs_mode', False):
+                import re
+                from gamingbench.utils.utils import strip_thinking_block
+                clean_response = strip_thinking_block(responses[0])
+                match = re.search(r'<obs>(.*?)</obs>', clean_response, re.DOTALL)
+                if match:
+                    self.in_game_obs = match.group(1).strip()
+                    self.logger.info(f"[In-Game Obs] Parsed from chat:\n{self.in_game_obs}")
+            return responses, query
+            
+        self.llm_query = wrapped_llm_query
+        
+        try:
+            return super().chat_step(observations, chat_history_str)
+        finally:
+            self.llm_query = original_llm_query
 
     def post_game_update(self, game_history: str, final_board_state: str = "", env_name: str = 'unknown'):
         """Called at the end of the game."""
         self.current_game_name = env_name
         
-        if self.batch_mode:
-            self._last_batch_result = game_history
-            self.logger.info('Batch mode: SlidingWindowAgent stored game history, synthesis deferred.')
-            return
-            
         if getattr(self, 'in_game_obs_mode', False) and getattr(self, 'in_game_obs', None):
             game_history = self._refine_final_obs(game_history)
+            
+        if self.batch_mode:
+            self._last_batch_result = game_history
+            self.logger.info('Batch mode: SlidingWindowAgent stored result, synthesis deferred.')
+            return
             
         # If not batch mode, just do it directly.
         self.flush_batch_updates([game_history])
@@ -192,7 +219,13 @@ class SlidingWindowAgent(PromptAgent):
             for i, h in enumerate(chunk):
                 formatted_histories += f"=== Game {chunk_idx * chunk_size + i + 1} ===\n{h}\n\n"
                 
-            update_prompt = SW_UPDATE_PROMPT.format(
+            if getattr(self, 'in_game_obs_mode', False):
+                from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT
+                prompt_template = SW_OBS_UPDATE_PROMPT
+            else:
+                prompt_template = SW_UPDATE_PROMPT
+                
+            update_prompt = prompt_template.format(
                 game_name=env_name,
                 game_intro=getattr(self, 'current_game_intro', "Game rules unavailable."),
                 n=chunk_n,

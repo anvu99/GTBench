@@ -31,6 +31,24 @@ Based on these {n} recent games, write an updated Opponent Reputation Note.
 This note should store insights you have perceived about the opponent — their behavioral tendencies, patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
 """
 
+SW_OBS_UPDATE_PROMPT = """\
+You are reviewing your own experience in {game_name}.
+
+--- GAME RULES ---
+{game_intro}
+
+--- YOUR CURRENT OPPONENT REPUTATION NOTE ---
+{old_notes}
+
+--- REFINED OBSERVATIONS FROM LATEST BATCH ({n} games) ---
+Below are your final refined observations from the latest {n} games against the same opponent:
+
+{game_histories}
+
+Based on these {n} recent observations, write an updated Opponent Reputation Note.
+This note should store insights you have perceived about the opponent — their behavioral tendencies, patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
+"""
+
 SW_OBS_GENERATION_SUFFIX = """\
 Additionally, after your move, write a concise in-game observation inside <obs>...</obs> tags.
 Summarize what you have observed about your opponent's strategy and behavior so far in THIS game.
