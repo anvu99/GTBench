@@ -21,6 +21,8 @@ from gamingbench.agents.expel_cot_agent import ExpelCotAgent
 
 from gamingbench.agents.reasoning_bank_agent import ReasoningBankAgent
 from gamingbench.agents.reasoning_bank_cot_agent import ReasoningBankCotAgent
+from gamingbench.agents.simple_tendency_agent import SimpleTendencyAgent
+from gamingbench.agents.consolidated_pqa_agent import ConsolidatedPQAAgent
 
 __all__ = [
     "PromptAgent",
@@ -43,5 +45,7 @@ __all__ = [
     "ExpelCotAgent",
     "ReasoningBankAgent",
     "ReasoningBankCotAgent",
-    "AgentProAgent"
+    "AgentProAgent",
+    "SimpleTendencyAgent",
+    "ConsolidatedPQAAgent",
 ]

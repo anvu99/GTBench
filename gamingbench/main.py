@@ -70,7 +70,8 @@ def _get_agent_store_path(agent):
            getattr(agent, 'ltm_store_path', 
            getattr(agent, 'rules_store_path', 
            getattr(agent, 'memory_bank_path', 
-           getattr(agent, 'store_path', None))))))
+           getattr(agent, 'tendency_store_path',
+           getattr(agent, 'store_path', None)))))))
 
 
 # ── Game-state pregeneration ──────────────────────────────────────────────────
@@ -200,6 +201,10 @@ def _get_memory_snapshot(agent):
             'evidence': copy.deepcopy(agent.store.evidence),
             'memories': copy.deepcopy(agent.store.memories) 
         }
+    elif hasattr(agent, 'tendency_store'):
+        return {
+            'tendency_store': copy.deepcopy(agent.tendency_store)
+        }
     return {}
 
 def _restore_memory_snapshot(clone, snapshot):
@@ -255,6 +260,10 @@ def _restore_memory_snapshot(clone, snapshot):
             clone.store.evidence = copy.deepcopy(snapshot['evidence'])
             clone.store.memories = copy.deepcopy(snapshot['memories'])
         clone.store_path = '/dev/null'
+    if hasattr(clone, 'tendency_store'):
+        if 'tendency_store' in snapshot:
+            clone.tendency_store = copy.deepcopy(snapshot['tendency_store'])
+        clone.tendency_store_path = '/dev/null'
 
 def clone_agent_for_batch(original_agent, memory_snapshot: dict):
     """Create an independent agent copy seeded with a frozen memory snapshot.

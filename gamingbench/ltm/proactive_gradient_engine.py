@@ -7,7 +7,7 @@ def run_proactive_gradient_engine(
     game_intro: str,
     game_history: str,
     window_summaries: str,
-    current_proac_ltm: str,
+    current_proactive_ltm: str,
     game_history_legend: str,
     prompt_template: str = PROACTIVE_GRADIENT_ENGINE_PROMPT
 ) -> str:
@@ -23,7 +23,7 @@ def run_proactive_gradient_engine(
         agent_id=agent_id,
         game_history=game_history,
         window_summaries=window_summaries,
-        current_proactive_ltm=current_proac_ltm,
+        current_proactive_ltm=current_proactive_ltm,
         game_history_legend=game_history_legend
     )
 

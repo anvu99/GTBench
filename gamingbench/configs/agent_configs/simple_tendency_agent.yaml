@@ -1,0 +1,10 @@
+agent_name: SimpleTendencyAgent
+agent_type: SimpleTendencyAgent
+num_generations: 1
+majority_vote: False
+enable_chat: False
+
+# SimpleTendencyAgent configuration
+tendency_store_path: "tendency_store.json"
+max_behaviours: 15
+batch_mode: True

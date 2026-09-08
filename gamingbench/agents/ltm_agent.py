@@ -29,6 +29,7 @@ class LTMAgent(PromptAgent):
         super(LTMAgent, self).__init__(config, **kwargs)
         
         self.summarize_every = getattr(config, "summarize_every", 5)
+        self.disable_proactive_memory = getattr(config, "disable_proactive_memory", True)
         
         base_store_path = getattr(config, "ltm_store_path", "ltm_store.json")
         job_id = os.environ.get("SLURM_JOB_ID")
@@ -179,7 +180,11 @@ class LTMAgent(PromptAgent):
         if current_ltm:
             observation_prompt = current_ltm + "\n\n" + observation_prompt
 
-        current_proactive_ltm = self.proactive_ltm_store.get("__overall__")
+        if getattr(self, 'disable_proactive_memory', False):
+            current_proactive_ltm = None
+        else:
+            current_proactive_ltm = self.proactive_ltm_store.get("__overall__")
+            
         if current_proactive_ltm and current_proactive_ltm.strip() != "(No signals currently stored)":
             active_proactive_ltm = current_proactive_ltm.split("--- GRAVEYARD OF FAILED STRATEGIES ---")[0].strip()
             proactive_ltm_injection = PROACTIVE_LTM_INJECTION_PROMPT.format(
@@ -261,7 +266,7 @@ class LTMAgent(PromptAgent):
             self.current_opponent_key and self.ltm_store.get(self.current_opponent_key)
         )
         has_self_ltm = bool(self.self_ltm_store.get("__self__"))
-        has_proactive_ltm = bool(self.proactive_ltm_store.get("__overall__"))
+        has_proactive_ltm = not getattr(self, 'disable_proactive_memory', False) and bool(self.proactive_ltm_store.get("__overall__"))
 
         if has_opponent_ltm or has_self_ltm or has_proactive_ltm:
             # Structured Thought format — signal evaluation is woven into
@@ -355,7 +360,7 @@ Your action wrapped by <>, i.e., {fmt}
             
         has_opponent_ltm = bool(self.current_opponent_key and self.ltm_store.get(self.current_opponent_key))
         has_self_ltm = bool(self.self_ltm_store.get("__self__"))
-        has_proactive_ltm = bool(self.proactive_ltm_store.get("__overall__"))
+        has_proactive_ltm = not getattr(self, 'disable_proactive_memory', False) and bool(self.proactive_ltm_store.get("__overall__"))
         
         if not (has_opponent_ltm or has_self_ltm or has_proactive_ltm):
             return super().chat_step(observations, chat_history_str)
@@ -652,7 +657,6 @@ Then, following this instruction:
                 opp_results[self.current_opponent_key] = future_opp.result()
 
             current_self_ltm = self.self_ltm_store.get("__self__") or "(No self-memory yet)"
-            current_proactive_ltm = self.proactive_ltm_store.get("__overall__") or "(No proactive-memory yet)"
             player_index = getattr(self, 'current_player_index', None)
             agent_id = "You"
             
@@ -667,24 +671,30 @@ Then, following this instruction:
                 game_history_legend=game_history_legend
             )
             
-            future_proactive = ex.submit(
-                run_proactive_gradient_engine,
-                model=self.model,
-                agent_id=agent_id,
-                game_intro=game_intro_for_update,
-                game_history=game_history,
-                window_summaries=window_summaries_str,
-                current_proactive_ltm=current_proactive_ltm,
-                game_history_legend=game_history_legend
-            )
+            if not self.disable_proactive_memory:
+                current_proactive_ltm = self.proactive_ltm_store.get("__overall__") or "(No proactive-memory yet)"
+                future_proactive = ex.submit(
+                    run_proactive_gradient_engine,
+                    model=self.model,
+                    agent_id=agent_id,
+                    game_intro=game_intro_for_update,
+                    game_history=game_history,
+                    window_summaries=window_summaries_str,
+                    current_proactive_ltm=current_proactive_ltm,
+                    game_history_legend=game_history_legend
+                )
             
             self_structural_report, raw_self_grad_gen, self_grad_prompt = future_self.result()
-            proactive_structural_report, raw_proactive_grad_gen, proactive_grad_prompt = future_proactive.result()
+            if not self.disable_proactive_memory:
+                proactive_structural_report, raw_proactive_grad_gen, proactive_grad_prompt = future_proactive.result()
+            else:
+                proactive_structural_report, raw_proactive_grad_gen, proactive_grad_prompt = "", "", ""
 
         for key, (rep, raw, prompt) in opp_results.items():
             self.logger.info(f'Gradient Report ({key}):\n{rep}')
         self.logger.info(f'Self Gradient Report:\n{self_structural_report}')
-        self.logger.info(f'Proactive Gradient Report:\n{proactive_structural_report}')
+        if not self.disable_proactive_memory:
+            self.logger.info(f'Proactive Gradient Report:\n{proactive_structural_report}')
 
         # Trace Logging
         log_file = getattr(self, '_parent_store_path', self.ltm_store_path).replace('.json', '_trace.log')
@@ -701,16 +711,17 @@ Then, following this instruction:
                 f.write(f"RESPONSE (raw):\n{raw_self_grad_gen}\n")
                 f.write("=" * 50 + "\n\n")
                 
-                f.write(f"=== GAME {getattr(self, 'game_count', 0)} PROACTIVE POST-GAME GRADIENT REPORT ===\n")
-                f.write(f"PROMPT:\n{proactive_grad_prompt}\n")
-                f.write(f"RESPONSE (raw):\n{raw_proactive_grad_gen}\n")
-                f.write("=" * 50 + "\n\n")
+                if not self.disable_proactive_memory:
+                    f.write(f"=== GAME {getattr(self, 'game_count', 0)} PROACTIVE POST-GAME GRADIENT REPORT ===\n")
+                    f.write(f"PROMPT:\n{proactive_grad_prompt}\n")
+                    f.write(f"RESPONSE (raw):\n{raw_proactive_grad_gen}\n")
+                    f.write("=" * 50 + "\n\n")
 
         if self.batch_mode:
             self._last_batch_result = {
                 "opp": opp_results,
                 "self": (self_structural_report, raw_self_grad_gen, self_grad_prompt),
-                "proactive": (proactive_structural_report, raw_proactive_grad_gen, proactive_grad_prompt)
+                "proactive": (proactive_structural_report, raw_proactive_grad_gen, proactive_grad_prompt) if not self.disable_proactive_memory else None
             }
             self.logger.info('Batch mode: opponent and self gradient data collected, synthesis deferred.')
             return
@@ -754,16 +765,20 @@ Then, following this instruction:
                 gradient_reports=[self_structural_report]
             )
             
-            future_new_proactive_ltm = ex.submit(
-                run_proactive_tgd_synthesis,
-                model=self.model,
-                game_intro=game_intro_for_update,
-                current_proactive_ltm=current_proactive_ltm,
-                gradient_reports=[proactive_structural_report]
-            )
+            future_new_proactive_ltm = None
+            if not self.disable_proactive_memory:
+                current_proactive_ltm = self.proactive_ltm_store.get("__overall__") or "(No proactive-memory yet)"
+                future_new_proactive_ltm = ex.submit(
+                    run_proactive_tgd_synthesis,
+                    model=self.model,
+                    game_intro=game_intro_for_update,
+                    current_proactive_ltm=current_proactive_ltm,
+                    gradient_reports=[proactive_structural_report]
+                )
             
             new_self_ltm, raw_self_synth_gen, _ = future_new_self_ltm.result()
-            new_proactive_ltm, raw_proactive_synth_gen, _ = future_new_proactive_ltm.result()
+            if not self.disable_proactive_memory:
+                new_proactive_ltm, raw_proactive_synth_gen, _ = future_new_proactive_ltm.result()
 
         for key, (new_ltm, raw_synth_gen, _) in new_ltms.items():
             self.logger.info(f'New LTM ({key}):\n{new_ltm}')
@@ -774,9 +789,10 @@ Then, following this instruction:
         self.self_ltm_store.update("__self__", new_self_ltm)
         self.self_ltm_store.save(self.self_ltm_store_path)
         
-        self.logger.info(f'New Proactive LTM:\n{new_proactive_ltm}')
-        self.proactive_ltm_store.update("__overall__", new_proactive_ltm)
-        self.proactive_ltm_store.save(self.proactive_ltm_store_path)
+        if not self.disable_proactive_memory:
+            self.logger.info(f'New Proactive LTM:\n{new_proactive_ltm}')
+            self.proactive_ltm_store.update("__overall__", new_proactive_ltm)
+            self.proactive_ltm_store.save(self.proactive_ltm_store_path)
 
     def flush_batch_updates(self, gradient_data: list) -> None:
         if not gradient_data:
@@ -797,7 +813,7 @@ Then, following this instruction:
                     report = d["self"][0].strip()
                     if report:
                         self_reports.append(report)
-                if "proactive" in d:
+                if "proactive" in d and d["proactive"] is not None:
                     report = d["proactive"][0].strip()
                     if report:
                         proactive_reports.append(report)
@@ -863,7 +879,7 @@ Then, following this instruction:
                 )
                 
             future_new_proactive_ltm = None
-            if proactive_reports:
+            if not self.disable_proactive_memory and proactive_reports:
                 current_proactive_ltm = self.proactive_ltm_store.get("__overall__") or '(No proactive-memory yet)'
                 future_new_proactive_ltm = ex.submit(
                     run_proactive_tgd_synthesis,

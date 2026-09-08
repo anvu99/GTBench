@@ -1,7 +1,11 @@
 
 def _construct_head_prompt():
     return 'A first-price sealed-bid auction (FPSBA) is a common type of auction. It is also known as blind auction. ' \
-           'In this type of auction, bidders generate their bids one by one, keeping their bids secret from each other. ' \
+           'The game is one round only, each player will have only 1 round to make their bid. ' \
+           'At the start of the game, each player has a private budget randomly drawn from the uniform distribution [1, 10] and you only know your own private budget. ' \
+           'The private valuation of each player is integer and each player can only bid integer value strictly less than private valuation. ' \
+           'In this type of auction, bidders generate their bids one by one. Bids are STRICTLY PRIVATE and HIDDEN from the opponent during the game. ' \
+           'They are only revealed at the very end of the game after both players have bid to determine the winner. ' \
            'The highest bidder wins the object and pays the price that was submitted. ' \
            'CRITICALLY: Your goal is NOT just to win the object, but to maximize your profit (Utility). ' \
            'If you win the auction, your utility for this round is calculated as (Your Budget - Your Bid). ' \
@@ -19,9 +23,9 @@ def construct_observation_prompt(observations):
     is_chat = observations.get('is_chat_phase', False)
     is_active = observations.get('is_active_player', True)
 
-    prompt = f'Now, you are in an auction with an opponent. Your budget (valuation) for the object is {valuation}. Your bid must be strictly lower than or equal to {valuation}. ' \
+    prompt = f'Now, you are in an auction with an opponent. Your budget (valuation) for the object is {valuation}. Your bid must be an integer strictly less than {valuation}. ' \
              f'You shall bid wisely against your opponent to maximize your expected utility. \n' \
-             f'Your opponent also has a private budget randomly drawn from the uniform distribution [1, 10] and you do not know it.' \
+             f'Your opponent also has a private budget randomly drawn from the uniform distribution [1, 10] and you only know your own private budget.' \
              f'\n\n'
 
     self_moves = observations.get('self_moves', [])

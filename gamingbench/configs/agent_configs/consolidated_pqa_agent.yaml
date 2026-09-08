@@ -1,0 +1,12 @@
+agent_name: ConsolidatedPQAAgent
+agent_type: ConsolidatedPQAAgent
+num_generations: 1
+majority_vote: False
+enable_chat: False
+
+# ConsolidatedPQA configuration
+cpqa_store_path: "cpqa_store.json"
+max_memories: 15
+max_stats_per_memory: 10
+max_dai_items: 15
+batch_mode: True
