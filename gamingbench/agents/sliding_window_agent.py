@@ -220,10 +220,19 @@ class SlidingWindowAgent(PromptAgent):
                 formatted_histories += f"=== Game {chunk_idx * chunk_size + i + 1} ===\n{h}\n\n"
                 
             if getattr(self, 'in_game_obs_mode', False):
-                from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT
-                prompt_template = SW_OBS_UPDATE_PROMPT
+                if getattr(self, 'sw_anti_decay', False):
+                    from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_DECAY as prompt_template
+                elif getattr(self, 'sw_anti_contradiction', False):
+                    from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION as prompt_template
+                else:
+                    from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT as prompt_template
             else:
-                prompt_template = SW_UPDATE_PROMPT
+                if getattr(self, 'sw_anti_decay', False):
+                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_DECAY as prompt_template
+                elif getattr(self, 'sw_anti_contradiction', False):
+                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_CONTRADICTION as prompt_template
+                else:
+                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT as prompt_template
                 
             update_prompt = prompt_template.format(
                 game_name=env_name,

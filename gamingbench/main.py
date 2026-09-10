@@ -58,6 +58,10 @@ def get_args():
                         help='Resume from existing experiment directory based on jsonl line count.')
     parser.add_argument('--in-game-obs', default=False, action='store_true',
                         help='Enable in-game observation tracking for SlidingWindowAgent.')
+    parser.add_argument('--sw-anti-decay', default=False, action='store_true',
+                        help='Enable anti-decay mode for SlidingWindowAgent.')
+    parser.add_argument('--sw-anti-contradiction', default=False, action='store_true',
+                        help='Enable anti-contradiction mode for SlidingWindowAgent.')
     args = parser.parse_args()
 
     return args
@@ -341,6 +345,10 @@ def run_game(game_name):
             a.use_proactive_memory = getattr(args, 'use_proactive_memory', False)
         if hasattr(a, 'in_game_obs_mode'):
             a.in_game_obs_mode = getattr(args, 'in_game_obs', False)
+        if hasattr(a, 'sw_anti_decay'):
+            a.sw_anti_decay = getattr(args, 'sw_anti_decay', False)
+        if hasattr(a, 'sw_anti_contradiction'):
+            a.sw_anti_contradiction = getattr(args, 'sw_anti_contradiction', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -790,6 +798,10 @@ def run_game_nplayer(game_name):
             a.use_proactive_memory = getattr(args, 'use_proactive_memory', False)
         if hasattr(a, 'in_game_obs_mode'):
             a.in_game_obs_mode = getattr(args, 'in_game_obs', False)
+        if hasattr(a, 'sw_anti_decay'):
+            a.sw_anti_decay = getattr(args, 'sw_anti_decay', False)
+        if hasattr(a, 'sw_anti_contradiction'):
+            a.sw_anti_contradiction = getattr(args, 'sw_anti_contradiction', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 

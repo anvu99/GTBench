@@ -401,7 +401,7 @@ class OpenSpielGame:
                         f"Format: Your private valuation: x.\n"
                         f"[Chat] lines show messages sent by the players.\n"
                         f"[Move] lines show the action taken by the player.\n"
-                        f"Note: This is a simultaneous bidding game. Both players submitted their bids at the exact same time without knowing each other's bids.\n\n"
+                        f"Note: This is a first-price sealed-bid auction. Players submit their bids sequentially, but each bid is sealed — no player can see any other player's bid until the post-game reveal.\n\n"
                     )
                 else:
                     you_num = 1 if agent_idx == 0 else 2
@@ -531,7 +531,7 @@ class OpenSpielGame:
                         f"Format: Your private valuation: x.\n"
                         f"[Chat] lines show messages sent by the players.\n"
                         f"[Move] lines show the action taken by the player.\n"
-                        f"Note: This is a simultaneous bidding game. Both players submitted their bids at the exact same time without knowing each other's bids.\n\n"
+                        f"Note: This is a first-price sealed-bid auction. Players submit their bids sequentially, but each bid is sealed — no player can see any other player's bid until the post-game reveal.\n\n"
                     )
                 else:
                     you_num = 1 if agent_idx == 0 else 2

@@ -29,6 +29,15 @@ Each game history below uses the same full Match Ground Truth format:
 
 Based on these {n} recent games, write an updated Opponent Reputation Note.
 This note should store insights you have perceived about the opponent — their behavioral tendencies, patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
+Format your output as a bulleted list of observations, with one atomic observation per bullet.
+"""
+
+SW_UPDATE_PROMPT_ANTI_DECAY = SW_UPDATE_PROMPT + """\
+Never remove a bullet from the previous note. You must carry all past observations forward and only append new ones or update existing ones.
+"""
+
+SW_UPDATE_PROMPT_ANTI_CONTRADICTION = SW_UPDATE_PROMPT + """\
+Never have two bullets that contradict each other. If a new observation contradicts an existing bullet, remove the old one and keep only the new observation.
 """
 
 SW_OBS_UPDATE_PROMPT = """\
@@ -47,6 +56,15 @@ Below are your final refined observations from the latest {n} games against the 
 
 Based on these {n} recent observations, write an updated Opponent Reputation Note.
 This note should store insights you have perceived about the opponent — their behavioral tendencies, patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
+Format your output as a bulleted list of observations, with one atomic observation per bullet.
+"""
+
+SW_OBS_UPDATE_PROMPT_ANTI_DECAY = SW_OBS_UPDATE_PROMPT + """\
+Never remove a bullet from the previous note. You must carry all past observations forward and only append new ones or update existing ones.
+"""
+
+SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION = SW_OBS_UPDATE_PROMPT + """\
+Never have two bullets that contradict each other. If a new observation contradicts an existing bullet, remove the old one and keep only the new observation.
 """
 
 SW_OBS_GENERATION_SUFFIX = """\
