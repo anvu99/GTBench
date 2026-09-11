@@ -25,6 +25,9 @@ class SlidingWindowAgent(PromptAgent):
         
         self.in_game_obs_mode: bool = False
         self.in_game_obs: str | None = None
+        
+        self.sw_anti_decay: bool = False
+        self.sw_anti_contradiction: bool = False
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align SW storage with the run's experiment folder."""
