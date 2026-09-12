@@ -28,6 +28,9 @@ class SlidingWindowAgent(PromptAgent):
         
         self.sw_anti_decay: bool = False
         self.sw_anti_contradiction: bool = False
+        
+        # Memory mode: 'default' | 'reputation' | 'strategy' | 'dual' | 'dual-structured'
+        self.sw_memory_mode: str = getattr(self, 'sw_memory_mode', 'default')
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align SW storage with the run's experiment folder."""
@@ -66,30 +69,91 @@ class SlidingWindowAgent(PromptAgent):
             
         self.current_game_name = env_name
         
-        current_notes = self.sw_store.get(env_name)
-        if not current_notes and obs_env != env_name:
-            current_notes = self.sw_store.get(obs_env)
-            
         from gamingbench.prompts.observation_prompts import construct_game_intro
+        game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
         
-        if current_notes:
-            sw_injection = SW_INJECTION_PROMPT.format(
-                game_name=env_name,
-                notes_text=current_notes
-            )
-            game_intro = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
-            observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
+        mode = getattr(self, 'sw_memory_mode', 'default')
+        
+        if mode == 'reputation':
+            from gamingbench.prompts.sliding_window_prompts import SW_REPUTATION_INJECTION_PROMPT
+            notes = self.sw_store.get(f"{env_name}_reputation") or self.sw_store.get(env_name)
+            if notes:
+                sw_injection = SW_REPUTATION_INJECTION_PROMPT.format(
+                    game_name=env_name,
+                    notes_text=notes
+                )
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
+                
+        elif mode == 'strategy':
+            from gamingbench.prompts.sliding_window_prompts import SW_STRATEGY_INJECTION_PROMPT
+            notes = self.sw_store.get(f"{env_name}_strategy") or self.sw_store.get(env_name)
+            if notes:
+                sw_injection = SW_STRATEGY_INJECTION_PROMPT.format(
+                    game_name=env_name,
+                    notes_text=notes
+                )
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
+                
+        elif mode == 'dual':
+            from gamingbench.prompts.sliding_window_prompts import SW_DUAL_INJECTION_PROMPT, SW_REPUTATION_INJECTION_PROMPT, SW_STRATEGY_INJECTION_PROMPT
+            reputation = self.sw_store.get(f"{env_name}_reputation")
+            strategy = self.sw_store.get(f"{env_name}_strategy")
+            if reputation and strategy:
+                sw_injection = SW_DUAL_INJECTION_PROMPT.format(
+                    game_name=env_name,
+                    reputation_text=reputation,
+                    strategy_text=strategy
+                )
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
+            elif reputation:
+                sw_injection = SW_REPUTATION_INJECTION_PROMPT.format(game_name=env_name, notes_text=reputation)
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
+            elif strategy:
+                sw_injection = SW_STRATEGY_INJECTION_PROMPT.format(game_name=env_name, notes_text=strategy)
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
+                
+        elif mode == 'dual-structured':
+            from gamingbench.prompts.sliding_window_prompts import SW_DUAL_STRUCTURED_INJECTION_PROMPT
+            strategy = self.sw_store.get(f"{env_name}_strategy")
+            if strategy:
+                sw_injection = SW_DUAL_STRUCTURED_INJECTION_PROMPT.format(
+                    game_name=env_name,
+                    notes_text=strategy
+                )
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
+                
+        else:  # mode == 'default' (original bullet-list reputation)
+            current_notes = self.sw_store.get(env_name)
+            if not current_notes and obs_env != env_name:
+                current_notes = self.sw_store.get(obs_env)
+            if current_notes:
+                from gamingbench.prompts.sliding_window_prompts import SW_INJECTION_PROMPT
+                sw_injection = SW_INJECTION_PROMPT.format(
+                    game_name=env_name,
+                    notes_text=current_notes
+                )
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + sw_injection, 1)
             
         if getattr(self, 'in_game_obs_mode', False) and getattr(self, 'in_game_obs', None):
             from gamingbench.prompts.sliding_window_prompts import SW_OBS_INJECTION_PROMPT
             obs_block = SW_OBS_INJECTION_PROMPT.format(in_game_obs=self.in_game_obs)
-            
-            if current_notes:
-                target = game_intro + "\n\n" + sw_injection
-            else:
-                target = construct_game_intro(env_name, enable_chat=getattr(self, 'enable_chat', False), game_config=getattr(self, 'game_config', None))
-                
-            observation_prompt = observation_prompt.replace(target, target + "\n\n" + obs_block, 1)
+            # Append after the last injection block already added, or after game_intro
+            # We insert after game_intro region (which now may include the sw_injection)
+            target = game_intro
+            # Try to find a more specific anchor if sw_injection was added
+            try:
+                if '=== END OPPONENT REPUTATION NOTE ===' in observation_prompt:
+                    target_marker = '=== END OPPONENT REPUTATION NOTE ==='
+                    observation_prompt = observation_prompt.replace(
+                        target_marker, target_marker + "\n\n" + obs_block, 1)
+                elif '=== END STRATEGY NOTE ===' in observation_prompt:
+                    target_marker = '=== END STRATEGY NOTE ==='
+                    observation_prompt = observation_prompt.replace(
+                        target_marker, target_marker + "\n\n" + obs_block, 1)
+                else:
+                    observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + obs_block, 1)
+            except Exception:
+                observation_prompt = observation_prompt.replace(game_intro, game_intro + "\n\n" + obs_block, 1)
             
         return system_prompt, observation_prompt
 
@@ -210,59 +274,200 @@ class SlidingWindowAgent(PromptAgent):
         self.logger.info(f'-' * 20 + f'Batch SW Flush (N={n})' + '-' * 20)
         
         env_name = self.current_game_name or "unknown"
-        current_notes = self.sw_store.get(env_name) or "(No notes yet)"
+        mode = getattr(self, 'sw_memory_mode', 'default')
         
         # Split game_histories into chunks of at most 4 games to avoid 32k context limits
         chunk_size = 4
         chunks = [game_histories[i:i + chunk_size] for i in range(0, len(game_histories), chunk_size)]
         
-        for chunk_idx, chunk in enumerate(chunks):
-            chunk_n = len(chunk)
-            formatted_histories = ""
-            for i, h in enumerate(chunk):
-                formatted_histories += f"=== Game {chunk_idx * chunk_size + i + 1} ===\n{h}\n\n"
-                
-            if getattr(self, 'in_game_obs_mode', False):
+        # --- Helper to pick the right single-memory update prompt ---
+        def _get_single_prompt_template(for_mode):
+            """Returns the prompt template for single-memory modes (default, reputation, strategy)."""
+            if for_mode == 'reputation':
                 if getattr(self, 'sw_anti_decay', False):
-                    from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_DECAY as prompt_template
+                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_REPUTATION_ANTI_DECAY
+                    return SW_UPDATE_PROMPT_REPUTATION_ANTI_DECAY
                 elif getattr(self, 'sw_anti_contradiction', False):
-                    from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION as prompt_template
+                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_REPUTATION_ANTI_CONTRADICTION
+                    return SW_UPDATE_PROMPT_REPUTATION_ANTI_CONTRADICTION
                 else:
-                    from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT as prompt_template
+                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_REPUTATION
+                    return SW_UPDATE_PROMPT_REPUTATION
+            elif for_mode == 'strategy':
+                from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_STRATEGY
+                return SW_UPDATE_PROMPT_STRATEGY
+            else:  # 'default'
+                if getattr(self, 'in_game_obs_mode', False):
+                    if getattr(self, 'sw_anti_decay', False):
+                        from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_DECAY
+                        return SW_OBS_UPDATE_PROMPT_ANTI_DECAY
+                    elif getattr(self, 'sw_anti_contradiction', False):
+                        from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION
+                        return SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION
+                    else:
+                        from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT
+                        return SW_OBS_UPDATE_PROMPT
+                else:
+                    if getattr(self, 'sw_anti_decay', False):
+                        from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_DECAY
+                        return SW_UPDATE_PROMPT_ANTI_DECAY
+                    elif getattr(self, 'sw_anti_contradiction', False):
+                        from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_CONTRADICTION
+                        return SW_UPDATE_PROMPT_ANTI_CONTRADICTION
+                    else:
+                        from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT
+                        return SW_UPDATE_PROMPT
+        
+        # --- Helper to pick reputation update prompt for dual modes ---
+        def _get_dual_reputation_prompt():
+            if getattr(self, 'sw_anti_decay', False):
+                from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_DECAY
+                return SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_DECAY
+            elif getattr(self, 'sw_anti_contradiction', False):
+                from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_CONTRADICTION
+                return SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_CONTRADICTION
             else:
-                if getattr(self, 'sw_anti_decay', False):
-                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_DECAY as prompt_template
-                elif getattr(self, 'sw_anti_contradiction', False):
-                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_CONTRADICTION as prompt_template
-                else:
-                    from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT as prompt_template
-                
-            update_prompt = prompt_template.format(
-                game_name=env_name,
-                game_intro=getattr(self, 'current_game_intro', "Game rules unavailable."),
-                n=chunk_n,
-                old_notes=current_notes,
-                game_histories=formatted_histories
-            )
+                from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_REPUTATION
+                return SW_UPDATE_PROMPT_DUAL_REPUTATION
+        
+        log_file = self.sw_store_path.replace('.json', '_trace.log')
+        game_intro = getattr(self, 'current_game_intro', "Game rules unavailable.")
+        
+        from gamingbench.utils.utils import strip_thinking_block
+        
+        if mode in ('dual', 'dual-structured'):
+            # ----------------------------------------------------------------
+            # Dual-memory flow: two sequential LLM calls per chunk
+            # Call 1: update reputation  (anti-decay/contradiction apply here)
+            # Call 2: update strategy    (always free incremental refinement)
+            # ----------------------------------------------------------------
+            reputation_key = f"{env_name}_reputation"
+            strategy_key = f"{env_name}_strategy"
             
-            messages = [{"role": "user", "content": update_prompt}]
-            try:
-                from gamingbench.utils.utils import strip_thinking_block
-                generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
-                current_notes = strip_thinking_block(generations[0])
-            except Exception as e:
-                self.logger.error(f"Failed to generate SW update for chunk {chunk_idx}: {e}")
-                
-            self.logger.info(f'Chunk {chunk_idx} New Notes (N={chunk_n}):\n{current_notes}')
+            current_reputation = self.sw_store.get(reputation_key) or "(No reputation note yet)"
+            current_strategy = self.sw_store.get(strategy_key) or "(No strategy yet)"
             
-            # Trace log
-            log_file = self.sw_store_path.replace('.json', '_trace.log')
-            with open(log_file, 'a') as f:
-                f.write(f'=== CHUNK {chunk_idx} FLUSH (N={chunk_n}) SW UPDATE ===\n')
-                f.write(f"PROMPT:\n{update_prompt}\n")
-                f.write(f'SYNTHESIZED NOTES:\n{current_notes}\n')
-                f.write('=' * 50 + '\n\n')
+            rep_prompt_template = _get_dual_reputation_prompt()
+            
+            if mode == 'dual-structured':
+                from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_STRATEGY_STRUCTURED as strat_prompt_template
+            else:
+                from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_STRATEGY as strat_prompt_template
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                chunk_n = len(chunk)
+                formatted_histories = ""
+                for i, h in enumerate(chunk):
+                    formatted_histories += f"=== Game {chunk_idx * chunk_size + i + 1} ===\n{h}\n\n"
                 
-        # Save final notes after all chunks are processed
-        self.sw_store.update(env_name, current_notes)
-        self.sw_store.save(self.sw_store_path)
+                # --- Call 1: Reputation update ---
+                rep_prompt = rep_prompt_template.format(
+                    game_name=env_name,
+                    game_intro=game_intro,
+                    n=chunk_n,
+                    old_notes=current_reputation,
+                    game_histories=formatted_histories
+                )
+                messages = [{"role": "user", "content": rep_prompt}]
+                try:
+                    generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                    new_reputation = strip_thinking_block(generations[0])
+                except Exception as e:
+                    self.logger.error(f"[Dual] Reputation update failed for chunk {chunk_idx}: {e}")
+                    new_reputation = current_reputation
+                
+                self.logger.info(f'[Dual] Chunk {chunk_idx} Reputation (N={chunk_n}):\n{new_reputation}')
+                with open(log_file, 'a') as f:
+                    f.write(f'=== CHUNK {chunk_idx} DUAL REPUTATION UPDATE (N={chunk_n}) ===\n')
+                    f.write(f'PROMPT:\n{rep_prompt}\n')
+                    f.write(f'NEW REPUTATION:\n{new_reputation}\n')
+                    f.write('=' * 50 + '\n\n')
+                
+                # --- Call 2: Strategy update (uses NEW reputation from Call 1) ---
+                # Compute total games observed for structured format header
+                games_observed = getattr(self, 'game_count', chunk_n)
+                
+                strat_kwargs = dict(
+                    game_name=env_name,
+                    game_intro=game_intro,
+                    n=chunk_n,
+                    reputation_notes=new_reputation,
+                    old_strategy=current_strategy,
+                    game_histories=formatted_histories
+                )
+                # dual-structured needs games_observed for the output header
+                if mode == 'dual-structured':
+                    strat_kwargs['games_observed'] = games_observed
+                
+                strat_prompt = strat_prompt_template.format(**strat_kwargs)
+                messages = [{"role": "user", "content": strat_prompt}]
+                try:
+                    generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                    new_strategy = strip_thinking_block(generations[0])
+                except Exception as e:
+                    self.logger.error(f"[Dual] Strategy update failed for chunk {chunk_idx}: {e}")
+                    new_strategy = current_strategy
+                
+                self.logger.info(f'[Dual] Chunk {chunk_idx} Strategy (N={chunk_n}):\n{new_strategy}')
+                with open(log_file, 'a') as f:
+                    f.write(f'=== CHUNK {chunk_idx} DUAL STRATEGY UPDATE (N={chunk_n}) ===\n')
+                    f.write(f'PROMPT:\n{strat_prompt}\n')
+                    f.write(f'NEW STRATEGY:\n{new_strategy}\n')
+                    f.write('=' * 50 + '\n\n')
+                
+                # Carry forward for next chunk
+                current_reputation = new_reputation
+                current_strategy = new_strategy
+            
+            # Save both memories
+            self.sw_store.update(reputation_key, current_reputation)
+            self.sw_store.update(strategy_key, current_strategy)
+            self.sw_store.save(self.sw_store_path)
+            
+        else:
+            # ----------------------------------------------------------------
+            # Single-memory flow: one LLM call per chunk
+            # Modes: 'default', 'reputation', 'strategy'
+            # ----------------------------------------------------------------
+            if mode == 'reputation':
+                store_key = f"{env_name}_reputation"
+            elif mode == 'strategy':
+                store_key = f"{env_name}_strategy"
+            else:
+                store_key = env_name  # 'default'
+            
+            current_notes = self.sw_store.get(store_key) or "(No notes yet)"
+            prompt_template = _get_single_prompt_template(mode)
+            
+            for chunk_idx, chunk in enumerate(chunks):
+                chunk_n = len(chunk)
+                formatted_histories = ""
+                for i, h in enumerate(chunk):
+                    formatted_histories += f"=== Game {chunk_idx * chunk_size + i + 1} ===\n{h}\n\n"
+                
+                update_prompt = prompt_template.format(
+                    game_name=env_name,
+                    game_intro=game_intro,
+                    n=chunk_n,
+                    old_notes=current_notes,
+                    game_histories=formatted_histories
+                )
+                
+                messages = [{"role": "user", "content": update_prompt}]
+                try:
+                    generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
+                    current_notes = strip_thinking_block(generations[0])
+                except Exception as e:
+                    self.logger.error(f"Failed to generate SW update for chunk {chunk_idx}: {e}")
+                    
+                self.logger.info(f'Chunk {chunk_idx} New Notes (N={chunk_n}):\n{current_notes}')
+                
+                with open(log_file, 'a') as f:
+                    f.write(f'=== CHUNK {chunk_idx} FLUSH (N={chunk_n}) SW UPDATE ===\n')
+                    f.write(f"PROMPT:\n{update_prompt}\n")
+                    f.write(f'SYNTHESIZED NOTES:\n{current_notes}\n')
+                    f.write('=' * 50 + '\n\n')
+                    
+            # Save final notes after all chunks are processed
+            self.sw_store.update(store_key, current_notes)
+            self.sw_store.save(self.sw_store_path)
