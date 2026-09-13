@@ -90,9 +90,7 @@ def construct_observation_prompt(observations):
         enable_chat = observations.get('chat_enabled', False)
         
         query_prompt = 'Now, it is your turn to provide your utterance regarding the division of items. ' \
-                       'You should output your utterance in the format <Utterance: [a, b, c]>.\n' \
-                       'For each category, you can not take all the items in a category, i.e., you can not take all 5 Peppers, 5 Strawberries, or 5 Cherries. ' \
-                       'Instead, you have to leave at least one item for each category to your partner.'
+                       'You should output your utterance in the format <Utterance: [a, b, c]>.'
 
         if is_chat:
             if is_active:

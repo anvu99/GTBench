@@ -27,6 +27,8 @@ class Negotiation(OpenSpielGame):
 
     def reset(self):
         super().reset()
+        if hasattr(self, 'true_utterance'):
+            delattr(self, 'true_utterance')
         # Only regenerate if an isolated RNG is present (i.e., pregeneration
         # context). In normal match play, custom_agent_utils is set directly
         # by run_match from the pregenerated game_state.
@@ -63,9 +65,9 @@ class Negotiation(OpenSpielGame):
         elif turn_type == 'Utterance':
             agent_actions = []
             # TODO: default item pool is [5, 5, 5]
-            for a in range(5):
-                for b in range(5):
-                    for c in range(5):
+            for a in range(6):
+                for b in range(6):
+                    for c in range(6):
                         agent_actions.append(f'<Utterance: [{a}, {b}, {c}]>')
 
         else:
@@ -97,7 +99,13 @@ class Negotiation(OpenSpielGame):
             r'Most recent utterance: (.+)', self.env.observation_string())
 
         recent_proposal = most_recent_proposal_match.group(1) if most_recent_proposal_match else "None"
-        recent_utterance = most_recent_utterance_match.group(1) if most_recent_utterance_match else "None"
+        
+        if hasattr(self, 'true_utterance') and most_recent_utterance_match:
+            recent_utterance = f"[{self.true_utterance[0]}, {self.true_utterance[1]}, {self.true_utterance[2]}]"
+            utterance_list = [str(x) for x in self.true_utterance]
+        else:
+            recent_utterance = most_recent_utterance_match.group(1) if most_recent_utterance_match else "None"
+            utterance_list = most_recent_utterance_match.group(1)[1:-1].replace(',', '').split(' ') if most_recent_utterance_match is not None else None
         
         if turn_type == 'Utterance':
             # If we are in the Utterance stage, the most recent proposal was just made by US.
@@ -114,7 +122,7 @@ class Negotiation(OpenSpielGame):
             'self_value_vector': agent_util_vec,
             'item_pool': item_pool,
             'most_recent_proposal': most_recent_proposal_match.group(1)[1:-1].replace(',', '').split(' ') if most_recent_proposal_match is not None else None,
-            'most_recent_utterance': most_recent_utterance_match.group(1)[1:-1].replace(',', '').split(' ') if most_recent_utterance_match is not None else None
+            'most_recent_utterance': utterance_list
         }
         return res
         pass
@@ -153,6 +161,9 @@ class Negotiation(OpenSpielGame):
                 first_number = int(numbers_match.group(1))
                 second_number = int(numbers_match.group(2))
                 third_number = int(numbers_match.group(3))
+                
+                self.true_utterance = [first_number, second_number, third_number]
+                
                 action = [min(4, first_number), min(
                     4, second_number), min(4, third_number)]
                 return int(pow(6, 3)) + 1 + self.encode_integer(action, 5)

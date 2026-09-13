@@ -119,8 +119,9 @@ Each game history below uses the same full Match Ground Truth format:
 {game_histories}
 
 Based on these {n} recent games, write an updated Opponent Reputation Note.
-This note should store insights you have perceived about the opponent — their behavioral tendencies,
-patterns, and hidden intent — that can help you anticipate their moves and perform better in future games.
+This note should STRICTLY store observations and insights you have perceived about the opponent — their behavioral tendencies,
+patterns, and hidden intent.
+DO NOT include any strategy, counter-strategy, recommendations, or instructions on what you should do. Focus EXCLUSIVELY on describing the opponent.
 """
 
 SW_UPDATE_PROMPT_REPUTATION_ANTI_DECAY = SW_UPDATE_PROMPT_REPUTATION + """\
@@ -159,7 +160,8 @@ Each game history below uses the same full Match Ground Truth format:
 {game_histories}
 
 Based on these {n} recent games, write an updated strategy for yourself to use in future games.
-Include anything you believe will help you perform better.
+This strategy should STRICTLY contain actionable instructions, rules, and plans for what YOU should do.
+DO NOT include any observations, reputation notes, or descriptive analysis of the opponent's behavior. Focus EXCLUSIVELY on generating your own strategy.
 """
 
 # =============================================================================

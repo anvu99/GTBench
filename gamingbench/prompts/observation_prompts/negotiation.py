@@ -88,9 +88,7 @@ def construct_observation_prompt(observations):
             last_proposal_prompt = ''
 
         query_prompt = 'Now, it is your turn to provide your utterance regarding the division of items. The utterance is what you' \
-                       'want to told to your opponent and does not mean your real intent. You should output your utterance in the format <Utterance: [a, b, c]>.\n' \
-                       'For each category, you can not take all the items in a category, i.e., you can not take all 5 Peppers, 5 Strawberries, or 5 Cherries. ' \
-                       'Instead, you have to leave at least one item for each category to your opponent.'
+                       'want to told to your opponent and does not mean your real intent. You should output your utterance in the format <Utterance: [a, b, c]>.'
                        
         if is_chat:
             if is_active:
