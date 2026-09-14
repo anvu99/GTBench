@@ -439,32 +439,60 @@ class Hanabi:
             return f"Hint given to {name}."
         return ""
 
+
+    def _agent_history_label(self, agent):
+        """Return a unique label for each agent in the post-game history string.
+        
+        Uses {agent_name}_{player_id} so that two agents of the same class
+        (e.g., SimpleTendencyAgent vs SimpleTendencyAgent) are distinguishable
+        in the history string passed to post_game_update.
+        Falls back to bare agent_name when player_id is not set.
+        """
+        if agent is None or not hasattr(agent, 'agent_name'):
+            return None
+        pid = getattr(agent, 'player_id', None)
+        if pid:
+            return f"{agent.agent_name}_{pid}"
+        return agent.agent_name
+
     def _generate_game_history(self, final_score, agent_list, model_list):
         history = []
+
         history.append(f"[Game Context] Cooperative Hanabi ({self.variant}).")
-        
+
         teammates = []
         for i in range(len(agent_list)):
             agent = agent_list[i]
-            if hasattr(agent, 'agent_name') and model_list:
-                name = f"{agent.agent_name}"
-            else:
-                name = f"Player {i}"
-            teammates.append(f"{name}")
+            name = self._agent_history_label(agent) if hasattr(agent, 'agent_name') and model_list else f"Player {i}"
+            teammates.append(name)
         history.append(f"[Teammates]: {', '.join(teammates)}")
         history.append("Note: For HINT actions, use the exact target teammate name listed above to target the specific player.")
         history.append("")
-        
+        history.append("[How to read this trajectory]")
+        history.append("  Each Round shows the board [State] followed by the [Move] chosen by the active player.")
+        history.append("  The player marked '(acting)' in [State] is the one whose turn it is.")
+        history.append("  - The acting player CANNOT see their own cards; their hand appears as 'Unknown'.")
+        history.append("    They can only rely on hints they have received (shown in [hints: ...] per card).")
+        history.append("  - The acting player CAN see their teammate's full hand (colors and ranks visible).")
+        history.append("  - The non-acting player's hand is shown with actual card values for reference.")
+        history.append("  [Move] shows the action the acting player chose. Valid actions are:")
+        history.append("    <HINT {name} COLOR {C}>  — give a color hint to a teammate (costs 1 info token)")
+        history.append("    <HINT {name} RANK {N}>   — give a rank hint to a teammate (costs 1 info token)")
+        history.append("    <DISCARD N>              — discard card at hand index N (refunds 1 info token)")
+        history.append("    <PLAY N>                 — play card at hand index N onto the firework stacks")
+        history.append("  Note: players CANNOT move or reorder cards in their hand.")
+        history.append("")
+
         for i, (logical_idx, action_str, outcome_str, state_snapshot) in enumerate(self._move_log):
             history.append(f"Round {i+1}:")
             history.append(f"  [State] {state_snapshot}")
             agent = agent_list[logical_idx] if agent_list and len(agent_list) > logical_idx else None
             if agent and hasattr(agent, 'agent_name') and model_list:
-                name = f"{agent.agent_name}"
+                name = self._agent_history_label(agent)
             else:
                 name = f"Player {logical_idx}"
             history.append(f"  [Move] {name}: {action_str}  -> {outcome_str}")
             history.append("")
-            
+
         history.append(f"Game Outcome: Cooperative final score = {final_score}.")
         return "\n".join(history)
