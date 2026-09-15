@@ -27,6 +27,7 @@ from gamingbench.ltm.tendency_prompts import (
     TENDENCY_REFLECTION_PROMPT,
     TENDENCY_APPLY_PROMPT,
     TENDENCY_STRATEGY_PROMPT,
+    COOP_TENDENCY_STRATEGY_PROMPT,
     TENDENCY_INJECTION_BLOCK,
     TENDENCY_EMPTY_BLOCK,
 )
@@ -84,6 +85,10 @@ class SimpleTendencyAgent(PromptAgent):
         """Called by main.py to align storage path with the run's experiment folder."""
         self.storage_dir = storage_dir
         base = os.path.basename(self.tendency_store_path)
+        if getattr(self, 'memory_mode', 'combined') == 'separate':
+            pid = getattr(self, 'player_id', 'pX')
+            if f"_{pid}.json" not in base:
+                base = base.replace(".json", f"_{pid}.json")
         self.tendency_store_path = os.path.join(storage_dir, base)
         if os.path.exists(self.tendency_store_path):
             self._load_store()
@@ -359,7 +364,8 @@ class SimpleTendencyAgent(PromptAgent):
         current_memories_str = json.dumps(self._for_llm(memories), indent=2) if memories else "[]"
 
         if self.agent_name:
-            game_history = game_history.replace(self.agent_name, f"{self.agent_name} (You)")
+            _my_label = f"{self.agent_name}_{self.player_id}" if getattr(self, 'player_id', None) else self.agent_name
+            game_history = game_history.replace(_my_label, f"{_my_label} (You)")
 
         game_rules = getattr(self, "current_game_intro", "") or ""
         prompt = TENDENCY_REFLECTION_PROMPT.format(
@@ -421,7 +427,8 @@ class SimpleTendencyAgent(PromptAgent):
         # Mark the agent's own moves in the game history before stashing
         marked_history = game_history
         if self.agent_name:
-            marked_history = game_history.replace(self.agent_name, f"{self.agent_name} (You)")
+            _my_label = f"{self.agent_name}_{self.player_id}" if getattr(self, 'player_id', None) else self.agent_name
+            marked_history = game_history.replace(_my_label, f"{_my_label} (You)")
 
         if self.batch_mode:
             self._last_batch_result = {
@@ -539,6 +546,13 @@ class SimpleTendencyAgent(PromptAgent):
                                                updated_games_observed)
         self.tendency_store[opponent_key]["strategy"] = new_strategy
 
+    @staticmethod
+    def _is_cooperative_game(game_rules: str) -> bool:
+        """Detect whether this is a cooperative game based on the game rules/intro text.
+        Checks for known cooperative game identifiers (hanabi, cooperative negotiation)."""
+        lower = game_rules.lower()
+        return "hanabi" in lower or "cooperative" in lower
+
     def _generate_strategy(
         self,
         opponent_key: str,
@@ -549,6 +563,8 @@ class SimpleTendencyAgent(PromptAgent):
         """
         Post-batch LLM call: synthesizes the strategy brief from updated memories
         + all batch game trajectories + the previous strategy.
+        Uses COOP_TENDENCY_STRATEGY_PROMPT for cooperative games (e.g. Hanabi),
+        and TENDENCY_STRATEGY_PROMPT for competitive games.
         Returns the strategy as a plain-text string.
         """
         entry = self.tendency_store.get(opponent_key, {})
@@ -564,7 +580,15 @@ class SimpleTendencyAgent(PromptAgent):
         all_trajectories = "\n\n".join(trajectory_sections) if trajectory_sections else "(None.)"
 
         game_rules = getattr(self, "current_game_intro", "") or ""
-        prompt = TENDENCY_STRATEGY_PROMPT.format(
+
+        if self._is_cooperative_game(game_rules):
+            prompt_template = COOP_TENDENCY_STRATEGY_PROMPT
+            phase_title = "COOPERATIVE STRATEGY SYNTHESIS"
+        else:
+            prompt_template = TENDENCY_STRATEGY_PROMPT
+            phase_title = "STRATEGY SYNTHESIS"
+
+        prompt = prompt_template.format(
             game_rules=game_rules,
             memory_stats=memory_stats,
             game_trajectories=all_trajectories,
@@ -577,7 +601,7 @@ class SimpleTendencyAgent(PromptAgent):
         raw = responses[0]
         stripped = strip_thinking_block(raw)
 
-        self._log_prompt("STRATEGY SYNTHESIS", prompt, raw)
+        self._log_prompt(phase_title, prompt, raw)
         return stripped.strip()
 
     def flush_batch_updates(self, gradient_data: list) -> None:

@@ -31,6 +31,9 @@ class SlidingWindowAgent(PromptAgent):
         
         # Memory mode: 'default' | 'reputation' | 'strategy' | 'dual' | 'dual-structured'
         self.sw_memory_mode: str = getattr(self, 'sw_memory_mode', 'default')
+        
+        # Enable per-observation frequency tracking in the memory update prompt
+        self.sw_track_frequency: bool = False
 
     def set_storage_dir(self, storage_dir):
         """Called by main.py to align SW storage with the run's experiment folder."""
@@ -276,8 +279,8 @@ class SlidingWindowAgent(PromptAgent):
         env_name = self.current_game_name or "unknown"
         mode = getattr(self, 'sw_memory_mode', 'default')
         
-        # Split game_histories into chunks of at most 4 games to avoid 32k context limits
-        chunk_size = 4
+        # Split game_histories into chunks of at most 8 games to avoid 32k context limits
+        chunk_size = 8
         chunks = [game_histories[i:i + chunk_size] for i in range(0, len(game_histories), chunk_size)]
         
         # --- Helper to pick the right single-memory update prompt ---
@@ -286,49 +289,57 @@ class SlidingWindowAgent(PromptAgent):
             if for_mode == 'reputation':
                 if getattr(self, 'sw_anti_decay', False):
                     from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_REPUTATION_ANTI_DECAY
-                    return SW_UPDATE_PROMPT_REPUTATION_ANTI_DECAY
+                    template = SW_UPDATE_PROMPT_REPUTATION_ANTI_DECAY
                 elif getattr(self, 'sw_anti_contradiction', False):
                     from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_REPUTATION_ANTI_CONTRADICTION
-                    return SW_UPDATE_PROMPT_REPUTATION_ANTI_CONTRADICTION
+                    template = SW_UPDATE_PROMPT_REPUTATION_ANTI_CONTRADICTION
                 else:
                     from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_REPUTATION
-                    return SW_UPDATE_PROMPT_REPUTATION
+                    template = SW_UPDATE_PROMPT_REPUTATION
             elif for_mode == 'strategy':
                 from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_STRATEGY
-                return SW_UPDATE_PROMPT_STRATEGY
+                template = SW_UPDATE_PROMPT_STRATEGY
             else:  # 'default'
                 if getattr(self, 'in_game_obs_mode', False):
                     if getattr(self, 'sw_anti_decay', False):
                         from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_DECAY
-                        return SW_OBS_UPDATE_PROMPT_ANTI_DECAY
+                        template = SW_OBS_UPDATE_PROMPT_ANTI_DECAY
                     elif getattr(self, 'sw_anti_contradiction', False):
                         from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION
-                        return SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION
+                        template = SW_OBS_UPDATE_PROMPT_ANTI_CONTRADICTION
                     else:
                         from gamingbench.prompts.sliding_window_prompts import SW_OBS_UPDATE_PROMPT
-                        return SW_OBS_UPDATE_PROMPT
+                        template = SW_OBS_UPDATE_PROMPT
                 else:
                     if getattr(self, 'sw_anti_decay', False):
                         from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_DECAY
-                        return SW_UPDATE_PROMPT_ANTI_DECAY
+                        template = SW_UPDATE_PROMPT_ANTI_DECAY
                     elif getattr(self, 'sw_anti_contradiction', False):
                         from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_ANTI_CONTRADICTION
-                        return SW_UPDATE_PROMPT_ANTI_CONTRADICTION
+                        template = SW_UPDATE_PROMPT_ANTI_CONTRADICTION
                     else:
                         from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT
-                        return SW_UPDATE_PROMPT
+                        template = SW_UPDATE_PROMPT
+            if getattr(self, 'sw_track_frequency', False):
+                from gamingbench.prompts.sliding_window_prompts import SW_TRACK_FREQUENCY_SUFFIX
+                template = template + "\n" + SW_TRACK_FREQUENCY_SUFFIX
+            return template
         
         # --- Helper to pick reputation update prompt for dual modes ---
         def _get_dual_reputation_prompt():
             if getattr(self, 'sw_anti_decay', False):
                 from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_DECAY
-                return SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_DECAY
+                template = SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_DECAY
             elif getattr(self, 'sw_anti_contradiction', False):
                 from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_CONTRADICTION
-                return SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_CONTRADICTION
+                template = SW_UPDATE_PROMPT_DUAL_REPUTATION_ANTI_CONTRADICTION
             else:
                 from gamingbench.prompts.sliding_window_prompts import SW_UPDATE_PROMPT_DUAL_REPUTATION
-                return SW_UPDATE_PROMPT_DUAL_REPUTATION
+                template = SW_UPDATE_PROMPT_DUAL_REPUTATION
+            if getattr(self, 'sw_track_frequency', False):
+                from gamingbench.prompts.sliding_window_prompts import SW_TRACK_FREQUENCY_SUFFIX
+                template = template + "\n" + SW_TRACK_FREQUENCY_SUFFIX
+            return template
         
         log_file = self.sw_store_path.replace('.json', '_trace.log')
         game_intro = getattr(self, 'current_game_intro', "Game rules unavailable.")

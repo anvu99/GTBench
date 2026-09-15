@@ -94,6 +94,26 @@ Focus on their behavioral tendencies, patterns, and hidden intent.
 Keep it concise (under 10 sentences)."""
 
 # =============================================================================
+# Flag: --sw-track-frequency
+# Appended to any memory-update prompt to enable per-observation occurrence counts.
+# Works independently of which base mode is used, but is primarily designed for
+# use with --sw-anti-decay so that accumulated counts persist across batches.
+#
+# Counting rule (3 cases):
+#   NEW observation        → initialize count at 1
+#   UPDATE or KEEP + SAW  → increment count by 1
+#   KEEP + DID NOT SEE    → leave count unchanged
+# =============================================================================
+
+SW_TRACK_FREQUENCY_SUFFIX = """\
+Each observation must carry an occurrence count in the format "... [count: N]":
+- If you are writing a NEW observation: initialize its count at 1.
+- If you are UPDATING or KEEPING an existing observation, AND you saw evidence for the underlying behavior in the latest game trajectories: increase its count by 1.
+- If you are KEEPING an existing observation but did NOT see evidence for it in this batch: leave its count unchanged.
+Note: the count update is independent of whether you modified the wording — even a reworded observation should have its count incremented if the behavior was present in this batch.
+"""
+
+# =============================================================================
 # Mode: "reputation"  (Variant 1)
 # Same as SW_UPDATE_PROMPT but WITHOUT the bullet-list requirement.
 # The LLM may choose any representation it finds most useful.
@@ -242,6 +262,11 @@ brief for playing against this opponent in future games. This brief will be the 
 information the agent sees during play — write it to be immediately actionable.
 
 == STRATEGY GENERATION RULES ==
+
+CRITICAL ACTION CONSTRAINTS:
+- Your recommended DO / INSTEAD actions MUST be physically possible under the GAME RULES.
+- DO NOT hallucinate actions that do not exist. For example, if playing Hanabi, players absolutely CANNOT sort, reorder, or move cards in their hands or their teammates' hands.
+- Every DO / INSTEAD must translate directly to one of the explicit legal moves (e.g., giving a specific hint, playing a specific index).
 
 Focus on repeating, predictable opponent patterns observed in the trajectories and reputation note.
 For EXPLOIT items: structure as WHEN / OPPONENT / DO.
