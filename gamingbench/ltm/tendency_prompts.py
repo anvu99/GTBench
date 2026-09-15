@@ -298,6 +298,17 @@ Use the game trajectories to validate which plays worked and which backfired thi
 Refine the previous strategy: update claims where new evidence changes the picture, keep what is still valid.
 When memory gives no clear signal for a situation, fall back to the most rational play given the game rules.
 
+ACTION-TRIGGER ESCALATION:
+Each confirmed EXPLOIT is a floor, not a ceiling. Apply this only when the WHEN describes \
+YOUR OWN action and memory shows the opponent reacting leniently. Do NOT apply when the \
+WHEN is triggered by the opponent's action — those entries are reactions, not escalation \
+opportunities.
+
+To escalate: extend the DO by one step in the same direction (e.g., claim an additional \
+item, demand a higher quantity, reduce a concession). If memory shows no resistance to \
+that extension, write the DO at the escalated level. Cap aggression only when memory \
+provides clear evidence of pushback.
+
 OPPONENT line: A brief statistic that justifies the DO/INSTEAD recommendation.
   Include only the evidence most relevant to that recommendation and total observation count.
   EXAMPLE: "Defects in 61% of cases (38 obs)" or "Complies 80% of the time (14 obs)"
@@ -332,13 +343,14 @@ OPPONENT line: A brief statistic that justifies the DO/INSTEAD recommendation.
 # =============================================================================
 
 TENDENCY_INJECTION_BLOCK = """\
+The following is your strategy developed through observing this opponent. \
+Apply it to maximise your utility:
+
 {tendency_block}
 
-Use this opponent profile strategically:
-- CONDITIONAL entries: when you recognise the stated trigger in the current game state, \
-use the action frequency distribution to anticipate what the opponent will do next.
-- INFERENCE entries: when you observe the stated public action from the opponent, \
-update your belief about their private information using the listed hidden-state distribution.\
+- [EXPLOIT]: proven strategies against this opponent. 
+- [AVOID]: actions and circumstances that it backfire.
+- [DEFAULT]: apply when no EXPLOIT or AVOID trigger fits your current situation.\
 """
 
 # =============================================================================
