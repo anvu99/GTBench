@@ -361,3 +361,76 @@ TENDENCY_EMPTY_BLOCK = """\
 === OPPONENT PROFILE ===
 No games observed against this opponent yet. No tendency data available.
 ======================="""
+
+# =============================================================================
+# Cooperative strategy synthesis prompt
+# For use in cooperative games (e.g. Hanabi) where the "opponent" is a partner.
+# Inputs: game_rules, updated_memories (pre-computed stats), game_trajectories,
+#         previous_strategy, games_observed, num_games
+# Output: plain-text cooperative strategy brief
+# =============================================================================
+
+COOP_TENDENCY_STRATEGY_PROMPT = """\
+You are developing a cooperative playbook for playing *with* a specific partner.
+
+GAME RULES:
+{game_rules}
+
+PARTNER MEMORY (pre-computed statistics from {games_observed} total games):
+{memory_stats}
+
+BATCH GAME TRAJECTORIES ({num_games} game(s) from this batch — your moves are marked "(You)"):
+{game_trajectories}
+
+PREVIOUS STRATEGY (update or preserve as needed):
+{previous_strategy}
+
+== YOUR TASK ==
+
+Produce a cooperative strategy brief for playing *alongside* this partner in future games.
+This brief is the ONLY partner information the agent sees during play — write it to be
+immediately actionable and mechanically valid under the constraints above.
+
+== STRATEGY GENERATION RULES ==
+
+CRITICAL ACTION CONSTRAINTS:
+- Your recommended DO / INSTEAD actions MUST be physically possible under the GAME RULES.
+- DO NOT hallucinate actions that do not exist. For example, if playing Hanabi, players absolutely CANNOT sort, reorder, or move cards in their hands or their teammates' hands.
+
+The PARTNER MEMORY above provides pre-computed percentages and observation counts — use these directly.
+Do NOT cite anchor IDs. Embed percentages and observation counts inline with each item.
+Focus on repeating, predictable partner patterns. Only include patterns with enough observations to be reliable.
+For SYNERGIZE items: structure as WHEN / PARTNER / DO.
+For PREVENT/MITIGATE items: structure as WHEN / PARTNER / DON'T / INSTEAD.
+Use the game trajectories to validate which coordinations worked and which led to misplays or life losses.
+Refine the previous strategy: update claims where new evidence changes the picture, keep what is still valid.
+When memory gives no clear signal for a situation, fall back to the most rational cooperative play given the rules.
+
+PARTNER line: A brief statistic that justifies the DO/INSTEAD recommendation.
+  Include only the evidence most relevant to that recommendation and total observation count.
+  EXAMPLE: "Plays the first hinted card immediately (85%, 34 obs)" or "Discards oldest unhinited card (73%, 22 obs)"
+
+== OUTPUT FORMAT ==
+
+=== COOPERATIVE STRATEGY BRIEF (Based on {games_observed} games) ===
+
+[SYNERGIZE — Do These]
+1. WHEN: <the observable trigger situation, expressed only in terms of what you can see>
+   PARTNER: <partner's observed behavior> (N%) [M total observations]
+   DO: <specific, concrete recommendation — what hint to give, what card to play/discard based on what you know>
+2. <...>
+
+[PREVENT / MITIGATE — Watch Out For These]
+1. WHEN: <the observable trigger situation>
+   PARTNER: <partner's observed behavior> (N%) [M total observations]
+   DON'T: <the naive/tempting coordination that backfires>
+   INSTEAD: <what to do instead>
+2. <...>
+
+[DEFAULT — When Memory Gives No Clear Signal]
+<Rational/optimal-play description for situations not covered by the patterns above.
+Must be mechanically valid under the hidden-information constraints.>
+
+===
+"""
+

@@ -64,6 +64,8 @@ def get_args():
                         help='Enable anti-contradiction mode for SlidingWindowAgent.')
     parser.add_argument('--sw-memory-mode', type=str, default='',
                         help='Memory mode for SlidingWindowAgent: reputation | strategy | dual | dual-structured. Empty string = default (bullet-list reputation).')
+    parser.add_argument('--sw-track-frequency', default=False, action='store_true',
+                        help='Enable per-observation frequency counting in SlidingWindowAgent memory updates.')
     args = parser.parse_args()
 
     return args
@@ -353,6 +355,8 @@ def run_game(game_name):
             a.sw_anti_contradiction = getattr(args, 'sw_anti_contradiction', False)
         if hasattr(a, 'sw_memory_mode') and getattr(args, 'sw_memory_mode', ''):
             a.sw_memory_mode = args.sw_memory_mode
+        if hasattr(a, 'sw_track_frequency'):
+            a.sw_track_frequency = getattr(args, 'sw_track_frequency', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -808,6 +812,8 @@ def run_game_nplayer(game_name):
             a.sw_anti_contradiction = getattr(args, 'sw_anti_contradiction', False)
         if hasattr(a, 'sw_memory_mode') and getattr(args, 'sw_memory_mode', ''):
             a.sw_memory_mode = args.sw_memory_mode
+        if hasattr(a, 'sw_track_frequency'):
+            a.sw_track_frequency = getattr(args, 'sw_track_frequency', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
