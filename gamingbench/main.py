@@ -12,7 +12,8 @@ import json
 
 games = ['tictactoe', 'connect4', 'texas_holdem', 'texasholdem', 'neuron_poker', 'backgammon', 'breakthrough',
          'first_sealed_auction', 'gin_rummy', 'liars_dice', 'negotiation', 'nim', 'pig', 'kuhn_poker',
-         'prisoners_dilemma', 'cooperative_negotiation', 'hanabi', 'hanabi-micro', 'hanabi-small', 'hanabi3-micro', 'hanabi-small-custom', 'mmlu_pro_qa']
+         'prisoners_dilemma', 'cooperative_negotiation', 'hanabi', 'hanabi-micro', 'hanabi-small', 'hanabi3-micro', 'hanabi-small-custom', 'mmlu_pro_qa',
+         'buy_sell_game']
 
 
 def get_args():

@@ -13,6 +13,7 @@ from gamingbench.prompts.observation_prompts import cooperative_negotiation
 from gamingbench.prompts.observation_prompts import hanabi
 from gamingbench.prompts.observation_prompts import texas_holdem
 from gamingbench.prompts.observation_prompts import mmlu_pro_qa
+from gamingbench.prompts.observation_prompts import buy_sell_game
 
 # maps
 mapping = {
@@ -34,7 +35,8 @@ mapping = {
     'hanabi-small-custom': hanabi,
     'hanabi3-micro': hanabi,
     'texas_holdem': texas_holdem,
-    'mmlu_pro_qa': mmlu_pro_qa
+    'mmlu_pro_qa': mmlu_pro_qa,
+    'buy_sell_game': buy_sell_game,
 }
 
 def construct_observation_prompt(observations, environment_name):

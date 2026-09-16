@@ -13,6 +13,7 @@ from gamingbench.prompts.system_prompts import cooperative_negotiation
 from gamingbench.prompts.system_prompts import hanabi
 from gamingbench.prompts.system_prompts import texas_holdem
 from gamingbench.prompts.system_prompts import mmlu_pro_qa
+from gamingbench.prompts.system_prompts import buy_sell_game
 
 # maps
 mapping = {
@@ -28,7 +29,8 @@ mapping = {
     'cooperative_negotiation': cooperative_negotiation,
     'hanabi': hanabi,
     'texas_holdem': texas_holdem,
-    'mmlu_pro_qa': mmlu_pro_qa
+    'mmlu_pro_qa': mmlu_pro_qa,
+    'buy_sell_game': buy_sell_game,
 }
 
 

@@ -48,6 +48,9 @@ def get_step_env_regex_and_format(env_name, turn_type=None):
     elif env_name == 'mmlu_pro_qa':
         regex = '<[A-Z]>'
         format = '<X>, e.g., <A>, <B>'
+    elif env_name == 'buy_sell_game':
+        regex = r'(<PROPOSE:\s*\d+>|<ACCEPT>|<REJECT>)'
+        format = '<PROPOSE: X>, <ACCEPT>, or <REJECT>. e.g., <PROPOSE: 50>, <ACCEPT>, <REJECT>'
     else:
         raise NotImplementedError
     return regex, format
