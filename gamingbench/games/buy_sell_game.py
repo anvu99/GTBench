@@ -2,6 +2,7 @@ import re
 import copy
 import logging
 from gamingbench.utils.history_tracker import GameMatch, Step
+from gamingbench.chat.chat_channel import ChatChannel
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ class BuySellGame:
                     )
                 agent.reset_game_state(opp_name, game_intro)
 
+        chat_enabled = all(getattr(agent, "enable_chat", False) for agent in agent_list)
+        chat_channel = ChatChannel(window_size=4)
+
         # ── Main loop ─────────────────────────────────────────────────────────
         for turn in range(1, self.max_rounds + 1):
             if game_over:
@@ -120,7 +124,38 @@ class BuySellGame:
                 "max_turns": self.max_rounds,
                 "board": board_str,
                 "legal_moves": legal_moves,
+                "is_chat_phase": False,
+                "is_active_player": True,
             }
+
+            # ── Chat Phase ────────────────────────────────────────────────────
+            if chat_enabled:
+                # 1. Active player speaks
+                obs_dict_active = copy.deepcopy(obs_dict)
+                obs_dict_active['is_chat_phase'] = True
+                chat_history_active = chat_channel.get_recent_window(player_idx)
+                msg_active, _ = agent.chat_step(obs_dict_active, chat_history_active)
+                if msg_active:
+                    chat_channel.add_message(player_idx, msg_active, round_idx=turn)
+
+                # 2. Peer player speaks
+                peer_idx = 1 - player_idx
+                obs_dict_peer = copy.deepcopy(obs_dict)
+                obs_dict_peer['player_idx'] = peer_idx
+                obs_dict_peer['player_role'] = roles[peer_idx]
+                obs_dict_peer['private_valuation'] = private_val[peer_idx]
+                obs_dict_peer['board'] = self._build_board_str(peer_idx, turn, last_proposed_price, last_proposer_idx, roles)
+                obs_dict_peer['is_chat_phase'] = True
+                obs_dict_peer['is_active_player'] = False
+                
+                peer_agent = agent_list[peer_idx]
+                chat_history_peer = chat_channel.get_recent_window(peer_idx)
+                msg_peer, _ = peer_agent.chat_step(obs_dict_peer, chat_history_peer)
+                if msg_peer:
+                    chat_channel.add_message(peer_idx, msg_peer, round_idx=turn)
+
+                # Update the main obs_dict with the new chat context for the action step
+                obs_dict['chat_context'] = chat_channel.get_recent_window(player_idx)
 
             # ── Step ──────────────────────────────────────────────────────────
             _step = Step(agent.agent_name)
@@ -204,13 +239,53 @@ class BuySellGame:
             logger.info("Match ended abnormally. Skipping post_game_update.")
             return
 
-        # ── post_game_update for memory agents ────────────────────────────────
+        # ── Send post-game updates ────────────────────────────────────────────
         results = [s0, s1]
-        for agent_idx, agent in enumerate(agent_list):
+        for idx, agent in enumerate(agent_list):
             if hasattr(agent, "post_game_update"):
-                agent_history = self._build_agent_history(
-                    agent_idx, steps_record, results, roles
+                agent_history = (
+                    f"[Position Legend] Each [Position] line shows the game state before that player's move.\n"
+                    f"[Chat] lines show messages sent by the players.\n"
+                    f"[Move] lines show the action taken by the player.\n\n"
                 )
+                
+                chat_ptr = 0
+                transcript = chat_channel.transcript if chat_enabled else []
+                
+                for step_idx, step in enumerate(match.steps):
+                    current_round = step_idx + 1
+                    p_idx = step.observation.get('player_idx')
+                    prefix = "You" if p_idx == idx else "Opponent"
+                    
+                    # We rebuild the board string for the specific agent viewing it
+                    # because the original step.board might have been generated for the other player.
+                    step_last_price = step.observation.get('last_proposed_price')
+                    step_last_proposer_role = step.observation.get('last_proposer_role')
+                    step_last_proposer_idx = SELLER_IDX if step_last_proposer_role == "Seller" else BUYER_IDX if step_last_proposer_role == "Buyer" else None
+                    board = self._build_board_str(idx, current_round, step_last_price, step_last_proposer_idx, roles)
+                    
+                    if prefix == "You":
+                        agent_history += f"Round {current_round} (Your move):\n"
+                    else:
+                        agent_history += f"Round {current_round} (Opponent's move):\n"
+                        
+                    agent_history += f"  [Position]: {board}\n"
+                    
+                    # Interleave chat (up to 2 messages per round: active then peer)
+                    msgs_this_round = 0
+                    while chat_ptr < len(transcript) and msgs_this_round < 2:
+                        msg = transcript[chat_ptr]
+                        chat_prefix = "You" if msg["speaker"] == idx else "Opponent"
+                        agent_history += f"  [Chat] {chat_prefix}: {msg['message']}\n"
+                        chat_ptr += 1
+                        msgs_this_round += 1
+                        
+                    agent_history += f"  [Move] {prefix}: {step.move}\n\n"
+
+                your_score = results[idx]
+                opp_score = results[1 - idx]
+                agent_history += f"Game Outcome: Your score={your_score}, Opponent score={opp_score}"
+
                 final_board = self._build_final_board_str(results, roles)
                 try:
                     agent.post_game_update(
@@ -275,35 +350,7 @@ class BuySellGame:
 
     def _build_final_board_str(self, results, roles) -> str:
         s0, s1 = results[SELLER_IDX], results[BUYER_IDX]
-        return (
-            f"Game over. Seller score={s0}, Buyer score={s1}."
-        )
-
-    def _build_agent_history(
-        self, agent_idx: int, steps_record: list, results: list, roles: dict
-    ) -> str:
-        """Build the history string passed to agent.post_game_update()."""
-        from gamingbench.prompts.observation_prompts import buy_sell_game as bsg_prompts
-        legend = bsg_prompts._construct_game_history_legend()
-        history = legend
-
-        for step_idx, (p_idx, board_str, action_str) in enumerate(steps_record):
-            current_round = step_idx + 1
-            is_self = (p_idx == agent_idx)
-            prefix = "You" if is_self else "Opponent"
-
-            if is_self:
-                history += f"Round {current_round} (Your move):\n"
-            else:
-                history += f"Round {current_round} (Opponent's move):\n"
-
-            history += f"  [Position]: {board_str}\n"
-            history += f"  [Move] {prefix}: {action_str}\n\n"
-
-        your_score = results[agent_idx]
-        opp_score = results[1 - agent_idx]
-        history += f"Game Outcome: Your score={your_score}, Opponent score={opp_score}"
-        return history
+        return f"Game over. Seller score={s0}, Buyer score={s1}."
 
     def is_match_normal(self) -> bool:
         return self.status == "Normal"
