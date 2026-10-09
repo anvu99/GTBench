@@ -26,7 +26,7 @@ from gamingbench.ltm.cpqa_prompts import (
     CPQA_MEMORY_INJECTION, CPQA_MEMORY_INJECTION_EMPTY, CPQA_SUS_SUFFIX,
     CPQA_POST_GAME_CONFIRM_PROMPT, CPQA_POST_GAME_SUS_EXTRACTION_PROMPT,
     CPQA_BATCH_DEDUP_EDGE_PROMPT, CPQA_MEMORY_SYNTHESIS_PROMPT,
-    STEP_A_PROMPTS, STEP_B_PROMPTS,
+    STEP_A_PROMPTS, STEP_B_PROMPTS, STEP_D_PROMPTS,
 )
 from gamingbench.ltm.cpqa_obs_graph import ObsGraphStore, OBS_TYPES, _obs_anchor_text, _format_memory_for_prompt
 from gamingbench.prompts.observation_prompts import construct_observation_prompt
@@ -127,7 +127,7 @@ class ConsolidatedPQAAgent(PromptAgent):
                     model_name=self.embedder_model,
                     gpu_id=self.embedder_gpu_id,
                     instruction="Given a behavioral observation about a game opponent, find semantically similar observations",
-                    use_flash_attn=True,
+                    use_flash_attn=False,
                 )
             except Exception as e:
                 print(f"Warning: Could not load QwenEmbedder: {e}. Embedding-based dedup disabled.")
@@ -525,9 +525,10 @@ class ConsolidatedPQAAgent(PromptAgent):
     # ------------------------------------------------------------------
 
     def _run_full_pipeline(self, opponent_key: str, all_game_data: list, game_rules: str):
-        """Runs Steps A→B→C for one opponent."""
-        self._run_step_A(opponent_key, all_game_data, game_rules)
-        self._run_step_C(opponent_key, game_rules)
+        """Runs Steps A→B→D→C for one opponent."""
+        self._run_step_A(opponent_key, all_game_data, game_rules)  # Step A calls Step B
+        self._run_step_D(opponent_key, game_rules)                 # Dedup across components
+        self._run_step_C(opponent_key, game_rules)                 # Rebuild injected block
 
     # ------------------------------------------------------------------
     # Step A: Dedup + Edge Creation
@@ -535,23 +536,27 @@ class ConsolidatedPQAAgent(PromptAgent):
 
     def _run_step_A(self, opponent_key: str, all_game_data: list, game_rules: str):
         """
-        Collects all structured observations from all games,
-        embeds them, runs FAISS dedup/candidate retrieval, then one LLM
-        call to deduplicate across the batch and assign to components.
+        Step A: Dedup + Edge Creation.
+
+        For each observation type:
+          1. Embed each new raw observation's anchor field.
+          2. Query FAISS directly on existing memory anchor embeddings to find
+             candidate memories (single-hop: no intermediate observation_nodes).
+          3. Call LLM to deduplicate new observations and assign each surviving
+             observation to either an existing memory or a new component.
+          4. Build synthesis_tasks from the LLM-assigned edges.
+          5. Call Step B.
         """
-        # 1. Collect all structured observation items
+        # 1. Collect all structured observation items from the batch
         structured_items = []
         for game_data in all_game_data:
             for obs in game_data.get("structured_obs", []):
                 structured_items.append(obs)
 
         if not structured_items:
-            # Nothing new to process (no new notes or variants).
-            # Any incremented counts from post-game confirmations will be automatically 
-            # picked up by Step C. We can just return.
             return
 
-        # 2. Format items with temp IDs and group them by type
+        # 2. Assign temp IDs and group by type
         grouped_items = {t: [] for t in OBS_TYPES}
         for i, item in enumerate(structured_items):
             temp_id = f"new_{i+1:03d}"
@@ -560,16 +565,21 @@ class ConsolidatedPQAAgent(PromptAgent):
             if obs_type in grouped_items:
                 grouped_items[obs_type].append(item)
 
-        # Helper function for a single observation type
-        def _process_obs_type(obs_type: str, items: list) -> dict:
+        def _process_obs_type(obs_type: str, items: list) -> list:
+            """
+            Runs Step A for one observation type.
+            Returns a list of synthesis_tasks: (mem_id_or_None, raw_obs_list, obs_type).
+            """
+            # Build the new-observations block for the prompt
             obs_lines = []
             for item in items:
-                item_copy = dict(item)
-                item_copy["id"] = item_copy.pop("temp_id")
+                item_copy = {k: v for k, v in item.items() if k != "temp_id"}
+                item_copy["id"] = item["temp_id"]
                 obs_lines.append(json.dumps(item_copy))
             new_observations_block = "[\n  " + ",\n  ".join(obs_lines) + "\n]"
 
-            candidate_map = {}
+            # Query FAISS on memory anchor embeddings (single-hop retrieval)
+            candidate_map = {}  # mem_id -> memory dict
             embedder = self._get_embedder()
             if embedder is not None:
                 for item in items:
@@ -579,15 +589,13 @@ class ConsolidatedPQAAgent(PromptAgent):
                     vec = self._embed(anchor_text)
                     if vec is None:
                         continue
-                    neighbors = self.store.query_similar_nodes(
+                    neighbors = self.store.query_similar_memories(
                         opponent_key, obs_type, vec,
                         top_k=self.faiss_top_k,
                         threshold=self.faiss_edge_threshold,
                     )
-                    for n in neighbors[:self.faiss_top_k]:
-                        mem = self.store.get_component_memory_for_node(opponent_key, n["obs_id"])
-                        if mem:
-                            candidate_map[mem["id"]] = mem
+                    for n in neighbors:
+                        candidate_map[n["mem_id"]] = n["memory"]
 
             if candidate_map:
                 cand_lines = []
@@ -596,7 +604,9 @@ class ConsolidatedPQAAgent(PromptAgent):
                     cand_lines.append("")
                 candidate_memories_block = "\n".join(cand_lines).strip()
             else:
-                candidate_memories_block = "(No existing components found — all new observations will start new components.)"
+                candidate_memories_block = (
+                    "(No existing components found — all new observations will start new components.)"
+                )
 
             prompt_template = STEP_A_PROMPTS.get(obs_type, STEP_A_PROMPTS["UNCONDITIONAL"])
             prompt = prompt_template.format(
@@ -611,155 +621,90 @@ class ConsolidatedPQAAgent(PromptAgent):
             self._log_prompt(f"STEP A: DEDUP + EDGE CREATION ({obs_type})", prompt, raw)
 
             parsed = extract_json_block(strip_thinking_block(raw))
-            return {
-                "surviving": parsed.get("surviving_observations", []),
-                "edges": parsed.get("edges", [])
-            }
+            surviving = parsed.get("surviving_observations", [])
+            edges = parsed.get("edges", [])
 
-        # 3. Run Step A concurrently per type
-        all_surviving = []
-        all_edges = []
-        tasks = [(t, items) for t, items in grouped_items.items() if items]
+            # --- Build synthesis tasks from LLM output ---
+            # Index surviving observations by their temp id
+            surviving_by_id = {obs.get("id", ""): obs for obs in surviving}
+            items_by_temp_id = {item["temp_id"]: item for item in items}
+
+            # Build edge map: temp_id -> ("existing", mem_id) | ("new", target_temp_id)
+            edge_map = {}
+            for edge in edges:
+                source = edge.get("source", "")
+                target = edge.get("target", "")
+                if source not in edge_map:
+                    if target.startswith("mem_"):
+                        edge_map[source] = ("existing", target)
+                    elif target.startswith("new_") and target in surviving_by_id:
+                        edge_map[source] = ("new", target)
+
+            # Union-Find among surviving temp ids to group new->new clusters
+            surv_ids = list(surviving_by_id.keys())
+            parent = {sid: sid for sid in surv_ids}
+
+            def find(x):
+                while parent.get(x, x) != x:
+                    parent[x] = parent.get(parent[x], parent[x])
+                    x = parent[x]
+                return x
+
+            def union(a, b):
+                ra, rb = find(a), find(b)
+                if ra != rb:
+                    parent[rb] = ra
+
+            for sid in surv_ids:
+                if sid in edge_map and edge_map[sid][0] == "new":
+                    union(sid, edge_map[sid][1])
+
+            # Group by root
+            groups = {}
+            for sid in surv_ids:
+                root = find(sid)
+                groups.setdefault(root, []).append(sid)
+
+            # One synthesis task per group
+            tasks = []
+            for root, group_ids in groups.items():
+                # Determine target memory: prefer an existing mem edge if any in group
+                target_mem_id = None
+                for gid in group_ids:
+                    if gid in edge_map and edge_map[gid][0] == "existing":
+                        target_mem_id = edge_map[gid][1]
+                        break
+
+                # Build raw obs list from surviving observation data (already LLM-merged)
+                raw_obs_list = []
+                for gid in group_ids:
+                    surv_obs = dict(surviving_by_id[gid])
+                    surv_obs.setdefault("count", 1)
+                    surv_obs["type"] = obs_type
+                    raw_obs_list.append(surv_obs)
+
+                tasks.append((target_mem_id, raw_obs_list, obs_type))
+
+            return tasks
+
+        # 3. Run Step A concurrently per obs type, collect all synthesis tasks
+        all_synthesis_tasks = []
+        type_tasks = [(t, items) for t, items in grouped_items.items() if items]
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = [executor.submit(_process_obs_type, t, items) for t, items in tasks]
+            futures = [executor.submit(_process_obs_type, t, items) for t, items in type_tasks]
             for f in concurrent.futures.as_completed(futures):
                 try:
-                    res = f.result()
-                    all_surviving.extend(res["surviving"])
-                    all_edges.extend(res["edges"])
+                    all_synthesis_tasks.extend(f.result())
                 except Exception as e:
                     if hasattr(self, 'logger'):
-                        self.logger.error(f"Error in Step A for obs type: {e}", exc_info=True)
+                        self.logger.error(f"Error in Step A: {e}", exc_info=True)
 
-        # 4. Insert surviving observations into the graph
-
-        # 5. Insert surviving observations into the graph
-        changed_component_ids = set()
-        temp_id_to_obs_id = {}
-
-        for obs_data in all_surviving:
-            temp_id = obs_data.get("id", "")
-            obs_type = obs_data.get("type", "")
-            count = obs_data.get("count", 1)
-            if obs_type not in OBS_TYPES:
-                continue
-
-            # Build fields dict by type
-            if obs_type == "UNCONDITIONAL":
-                fields = {"behavior": obs_data.get("behavior", "")}
-            elif obs_type == "CONDITIONAL":
-                fields = {
-                    "game_state": obs_data.get("game_state", ""),
-                    "action": obs_data.get("action", ""),
-                }
-            elif obs_type == "INFERENCE":
-                fields = {
-                    "public_action": obs_data.get("public_action", ""),
-                    "underlying_driver": obs_data.get("underlying_driver", ""),
-                }
-            else:
-                continue
-
-            # Embed the anchor field for future retrieval
-            anchor_text = _obs_anchor_text({"type": obs_type, **fields})
-            embedding = self._embed(anchor_text)
-
-            obs_id = self.store.add_observation_node(
-                opponent_key, obs_type, fields, embedding=embedding, count=count
-            )
-            temp_id_to_obs_id[temp_id] = obs_id
-
-        # 6. Apply edges: separate new→existing and new→new
-        new_to_existing: dict = {}   # obs_id -> mem_id (existing component)
-        new_to_new_edges: list = []  # (obs_id_a, obs_id_b) pairs
-
-        for edge in all_edges:
-            source_temp = edge.get("source", "")
-            target = edge.get("target", "")
-            obs_id = temp_id_to_obs_id.get(source_temp)
-            if not obs_id:
-                continue
-
-            if target.startswith("new_"):
-                # new→new edge: connect two new observations
-                target_obs_id = temp_id_to_obs_id.get(target)
-                if target_obs_id and obs_id != target_obs_id:
-                    new_to_new_edges.append((obs_id, target_obs_id))
-            elif target.startswith("mem_"):
-                # new→existing component edge
-                new_to_existing[obs_id] = target
-                self.store.assign_obs_to_component(opponent_key, [obs_id], target)
-                changed_component_ids.add(target)
-
-        # 7. Union-Find: cluster new observations connected to each other
-        #    so they get synthesized together into one new component
-        all_new_obs_ids = list(temp_id_to_obs_id.values())
-
-        parent = {oid: oid for oid in all_new_obs_ids}
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        def union(a, b):
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[rb] = ra
-
-        for a, b in new_to_new_edges:
-            if a in parent and b in parent:
-                union(a, b)
-
-        # Group clusters: root -> list of obs_ids in that cluster
-        clusters: dict = {}
-        for obs_id in all_new_obs_ids:
-            root = find(obs_id)
-            clusters.setdefault(root, []).append(obs_id)
-
-        # 8. Build synthesis_tasks directly (no sentinel strings)
-        #    Each task: (mem_id_or_None, new_obs_ids, component_type)
-        synthesis_tasks = []
-        
-        # Track which existing memories got new observations
-        mem_new_obs = {}
-        for oid, mid in new_to_existing.items():
-            mem_new_obs.setdefault(mid, []).append(oid)
-
-        for root, cluster_obs_ids in clusters.items():
-            # Check if any node in this cluster is already assigned to existing component
-            existing_mem_id = None
-            for oid in cluster_obs_ids:
-                if oid in new_to_existing:
-                    existing_mem_id = new_to_existing[oid]
-                    break
-
-            if existing_mem_id:
-                # Attach whole cluster to the existing component
-                unassigned = [oid for oid in cluster_obs_ids if oid not in new_to_existing]
-                if unassigned:
-                    self.store.assign_obs_to_component(opponent_key, unassigned, existing_mem_id)
-                    mem_new_obs.setdefault(existing_mem_id, []).extend(unassigned)
-            else:
-                # All new — form a new component
-                first_node = self.store.get_observation_node(opponent_key, cluster_obs_ids[0]) if cluster_obs_ids else None
-                if first_node:
-                    synthesis_tasks.append((None, cluster_obs_ids, first_node["type"]))
-
-        # Add synthesis tasks for all existing components that received new observations
-        for mem_id, new_obs_ids in mem_new_obs.items():
-            mem = self.store.get_memory(opponent_key, mem_id)
-            if mem:
-                # Pass ONLY the new observation IDs to Step B, so it updates incrementally
-                synthesis_tasks.append((mem_id, new_obs_ids, mem.get("type", "UNCONDITIONAL")))
-
-        # 9. Run Step B with direct task list
-        self._run_step_B(opponent_key, synthesis_tasks, game_rules)
+        # 4. Run Step B with the collected synthesis tasks
+        self._run_step_B(opponent_key, all_synthesis_tasks, game_rules)
 
     # ------------------------------------------------------------------
-    # Step B: Memory Synthesis per changed component
+    # Step B: Memory Synthesis per component
     # ------------------------------------------------------------------
 
     def _run_step_B(self, opponent_key: str,
@@ -768,15 +713,18 @@ class ConsolidatedPQAAgent(PromptAgent):
         """
         Synthesizes memory entries for a list of component tasks.
 
-        synthesis_tasks: list of (mem_id_or_None, obs_ids, component_type)
-          - mem_id is None  → create a new memory entry for these obs_ids
-          - mem_id is set   → update the existing memory entry
+        synthesis_tasks: list of (mem_id_or_None, raw_obs_list, component_type)
+          - mem_id is None     → create a new memory entry
+          - mem_id is a str    → update the existing memory entry
+          - raw_obs_list       → list of raw observation dicts (already LLM-deduped by Step A)
+
+        After synthesis, the anchor field is embedded and stored so FAISS stays current.
         """
         if not synthesis_tasks:
             return
 
         def _synthesize_component(task):
-            mem_id, obs_ids, component_type = task
+            mem_id, raw_obs_list, component_type = task
 
             existing_mem = self.store.get_memory(opponent_key, mem_id) if mem_id else None
             existing_mem_str = (
@@ -785,7 +733,7 @@ class ConsolidatedPQAAgent(PromptAgent):
                 else "(None — creating new memory entry.)"
             )
 
-            nodes_str = self.store.format_component_for_synthesis(opponent_key, mem_id, obs_ids)
+            nodes_str = self.store.format_raw_obs_for_synthesis(raw_obs_list)
 
             prompt_template = STEP_B_PROMPTS.get(component_type, STEP_B_PROMPTS["UNCONDITIONAL"])
             prompt = prompt_template.format(
@@ -814,17 +762,31 @@ class ConsolidatedPQAAgent(PromptAgent):
                 if isinstance(b, dict) and "id" in b and "description" in b
             ]
 
-            upserted_mem_id = self.store.upsert_memory(
+            # Embed the memory for FAISS retrieval in future batches.
+            # UNCONDITIONAL memories have no anchor (it's always ""), so we embed
+            # the concatenation of bullet descriptions as the best proxy for
+            # matching future UNCONDITIONAL observations (which embed their behavior field).
+            anchor = parsed.get("anchor", "")
+            if component_type == "UNCONDITIONAL":
+                bullet_texts = " | ".join(
+                    b.get("description", "") for b in clean_bullets[:6]
+                )
+                embed_text = bullet_texts or parsed.get("description", "")
+            else:
+                embed_text = anchor  # CONDITIONAL: game_state; INFERENCE: public_action
+            embedding = self._embed(embed_text) if embed_text.strip() else None
+
+            self.store.upsert_memory(
                 opp_key=opponent_key,
                 mem_id=mem_id,
                 mem_type=component_type,
                 name=parsed.get("name", "Unnamed Memory"),
                 description=parsed.get("description", ""),
-                anchor=parsed.get("anchor", ""),
+                anchor=anchor,
                 bullets=clean_bullets,
-                observation_ids=obs_ids,
+                embedding=embedding,
+                rebuild_faiss=False,  # defer FAISS rebuild to avoid concurrent-rebuild race
             )
-            self.store.assign_obs_to_component(opponent_key, obs_ids, upserted_mem_id)
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = [executor.submit(_synthesize_component, task) for task in synthesis_tasks]
@@ -835,9 +797,108 @@ class ConsolidatedPQAAgent(PromptAgent):
                     if hasattr(self, 'logger'):
                         self.logger.error(f"Step B synthesis error: {e}")
 
+        # Rebuild FAISS once per obs_type after ALL concurrent upserts are done.
+        # This avoids the race where concurrent _rebuild_faiss_index calls snapshot
+        # different subsets of memories and the last-to-finish overwrites with a
+        # partial index.
+        for obs_type in OBS_TYPES:
+            self.store._rebuild_faiss_index(opponent_key, obs_type)
+
     # ------------------------------------------------------------------
-    # Step C: Programmatic consolidation (no LLM call)
+    # Step D: Cross-component deduplication
     # ------------------------------------------------------------------
+
+    def _run_step_D(self, opponent_key: str, game_rules: str):
+        """
+        Step D: Cross-component deduplication (runs after Step B, before Step C).
+
+        Fires 3 concurrent LLM calls — one per observation type. Each call
+        receives ALL existing memories of that type and is asked to identify
+        duplicates. The backend applies the merge operations programmatically:
+          - upsert the kept component with merged bullets
+          - delete the discarded component(s)
+          - FAISS index is rebuilt automatically by upsert/delete
+        """
+        def _dedup_type(obs_type: str):
+            all_memories_block = self.store.format_memories_by_type_for_dedup(
+                opponent_key, obs_type
+            )
+            # Skip if only 0 or 1 component — nothing to deduplicate
+            mems_of_type = [
+                m for m in self.store.get_all_memories(opponent_key)
+                if m.get("type") == obs_type
+            ]
+            if len(mems_of_type) <= 1:
+                return
+
+            prompt_template = STEP_D_PROMPTS[obs_type]
+            prompt = prompt_template.format(
+                game_rules=game_rules,
+                all_memories_block=all_memories_block,
+            )
+            msgs = [{"role": "user", "content": prompt}]
+            resp, _ = self.llm_query(msgs, n=1, stop=None, prompt_type='move')
+            raw = resp[0]
+            self._log_prompt(f"STEP D: DEDUPLICATION ({obs_type})", prompt, raw)
+
+            parsed = extract_json_block(strip_thinking_block(raw))
+            if not parsed:
+                return
+
+            for group in parsed.get("groups", []):
+                keep_id = group.get("keep_id", "")
+                discard_ids = group.get("discard_ids", [])
+                updated_bullets_raw = group.get("updated_bullets", [])
+                if not keep_id or not discard_ids:
+                    continue
+                # Validate that keep_id and all discard_ids actually exist
+                if not self.store.get_memory(opponent_key, keep_id):
+                    continue
+                clean_bullets = [
+                    {
+                        "id": str(b["id"]),
+                        "description": str(b["description"]),
+                        "count": int(b.get("count", 1)),
+                    }
+                    for b in updated_bullets_raw
+                    if isinstance(b, dict) and "id" in b and "description" in b
+                ]
+                # Compute embedding for the kept (merged) memory
+                updated_anchor = group.get("updated_anchor", "")
+                if obs_type == "UNCONDITIONAL":
+                    bullet_texts = " | ".join(
+                        b.get("description", "") for b in clean_bullets[:6]
+                    )
+                    embed_text = bullet_texts or group.get("updated_description", "")
+                else:
+                    embed_text = updated_anchor
+                embedding = self._embed(embed_text) if embed_text.strip() else None
+
+                # Upsert the kept memory with merged content
+                self.store.upsert_memory(
+                    opp_key=opponent_key,
+                    mem_id=keep_id,
+                    mem_type=obs_type,
+                    name=group.get("updated_name", ""),
+                    description=group.get("updated_description", ""),
+                    anchor=updated_anchor,
+                    bullets=clean_bullets,
+                    embedding=embedding,
+                )
+                # Delete each discarded component
+                for discard_id in discard_ids:
+                    if discard_id != keep_id:  # safety guard
+                        self.store.delete_memory(opponent_key, discard_id)
+
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            futures = [executor.submit(_dedup_type, t) for t in OBS_TYPES]
+            for f in concurrent.futures.as_completed(futures):
+                try:
+                    f.result()
+                except Exception as e:
+                    if hasattr(self, 'logger'):
+                        self.logger.error(f"Step D dedup error: {e}")
+
 
     def _run_step_C(self, opponent_key: str, game_rules: str = ""):
         """

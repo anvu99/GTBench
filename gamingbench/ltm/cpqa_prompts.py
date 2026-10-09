@@ -122,36 +122,87 @@ about the opponent's behavior.
 
 Your task: analyze the FULL GAME TRAJECTORY and the IN-GAME NOTES to extract formal structured observations.
 - Use the IN-GAME NOTES as hints for specific suspicious actions the agent noticed during play.
-- ALSO, independently review the trajectory for any other key opponent behaviors or strategic decisions that are important to remember.
 - CRITICAL: DO NOT generate observations for behaviors that are already clearly described in the EXISTING OPPONENT PROFILE. Only extract NEW behaviors, NEW variants, or notable deviations from their known profile.
 - ACTIONABILITY FILTER: Filter all observations for strict actionability. A behavior is only worth remembering if it provides a repeatable weakness/sub-optimal tendency that can be exploited, OR a reliable tell that allows us to deduce their hidden information (e.g., budget, hand state). If a behavior cannot be strategically exploited in future games, DISCARD it.
 
-For every notable behavior you discover (either from the notes or your own review), categorize it into one of three types and extract the required fields:
+--- CLASSIFICATION DECISION TREE ---
 
-1. UNCONDITIONAL: General behavioral tendencies.
-   - Requires field: "behavior" — a SPECIFIC, CONCRETE description of what the opponent actually did in this game.
-   - Describe exactly what was observable: the specific action, chat content, or bidding choice. Do NOT generalize or abstract.
+Before writing any observation, ask these three questions in order:
 
-2. CONDITIONAL: Behavior triggered by a specific game state.
+  Q1: Does this behavior occur ALWAYS (unconditionally), or only when something
+      specific happens first (a game event, a chat message, a disclosed number)?
+      └── ALWAYS, no trigger → UNCONDITIONAL
+      └── Only when triggered → go to Q2
+
+  Q2: Does the trigger reveal something about the opponent's HIDDEN private
+      information? (private valuation, budget cap, cost, hand state, etc.)
+      └── YES → INFERENCE
+            anchor  = the observable public action/statement that is the trigger
+            bullet  = the hidden private state it implies
+      └── NO  → go to Q3
+
+  Q3: Does the trigger predict a specific future action they will take?
+      └── YES → CONDITIONAL
+            anchor  = the game state / event that triggers it
+            bullet  = the predictable observable action they take in response
+
+⚠️  COMPOUND-BEHAVIOR WARNING — most common misclassification:
+  If you observe "they say X in chat AND then do Y", that is NOT UNCONDITIONAL.
+  You must DECOMPOSE it:
+    - The chat statement (X) is the PUBLIC TRIGGER.
+    - The subsequent action (Y) is the CONSEQUENCE.
+  Then apply Q2: does X reveal hidden private information? → INFERENCE.
+  If not: does X predict Y reliably? → CONDITIONAL.
+  NEVER bundle trigger + consequence into one description and call it UNCONDITIONAL.
+
+  WRONG ✗:
+    type: UNCONDITIONAL
+    behavior: "Publicly declares a bid ceiling of 3 in chat AND submits bid ≤ 3"
+
+  CORRECT ✓:
+    type: INFERENCE
+    public_action: "Opponent declares a numeric bid ceiling in chat (e.g. 'bids over 3 are irrational')"
+    underlying_driver: "Their sealed bid will be at or below the stated ceiling, implying their private valuation is constrained to at most that number"
+
+---
+
+For every notable behavior, extract the required fields for its type:
+
+1. UNCONDITIONAL: General behavioral tendencies with NO identifiable trigger.
+   - Requires field: "behavior" — a SPECIFIC, CONCRETE description of what they did.
+   - Describe exactly what was observable: the specific action, chat content, or bidding
+     choice. Do NOT generalize or abstract.
+   - Only use this type if you cannot identify any specific trigger or precondition.
+
+2. CONDITIONAL: Behavior triggered by a specific game state or event.
    - Requires fields: "game_state" (the trigger), "action" (what they did)
-   - CRITICAL: "game_state" must describe only the STIMULUS — the situation or event that occurred. It must be completely neutral about what the opponent does next.
+   - "game_state" must describe ONLY the STIMULUS — the situation that occurred.
+     It must be completely neutral about what the opponent does next.
      BAD (reaction baked in): "Opponent announces a conservative cap and then violates it"
-     GOOD (trigger only): "Opponent publicly announces a bid ceiling or cap before submitting"
-   - "action" must be the purely OBSERVABLE REACTION — no interpretation or judgment. Describe what you could see, not what you conclude from it.
-   - If a behavior is better described as "whenever X happens, the opponent does Y", it is CONDITIONAL.
+     GOOD (trigger only):     "Opponent publicly announces a bid ceiling or cap before submitting"
+   - "action" must be the purely OBSERVABLE REACTION — no interpretation or judgment.
+   - If a behavior is described as "whenever X happens, the opponent does Y" → CONDITIONAL.
 
-3. INFERENCE: Private information or hidden state inferred from a public action.
-   - Requires fields: "public_action" (what they did), "underlying_driver" (the hidden private state this reveals)
-   - CRITICAL: "underlying_driver" must be a PRIVATE VARIABLE the opponent holds that is NOT directly observable — for example their private valuation range, a hard budget constraint, or a mechanical game limit.
-     BAD (motivation/intent): "Strategic motivation to manipulate anchoring", "Tactical bluff to suppress competition"
-     BAD (future action): "Will submit a higher bid than stated", "Plans to defect after cooperation"
-     GOOD (private state): "Private valuation is constrained to ≤2", "Budget ceiling prevents bidding above 1"
-   - If a behavior describes a future action or a psychological motivation rather than a private state, classify it as CONDITIONAL or discard it.
+3. INFERENCE: A public action that reveals hidden private information.
+   - Requires fields: "public_action" (what they did publicly), "underlying_driver" (the
+     hidden private state this reveals)
+   - "underlying_driver" must be a PRIVATE VARIABLE the opponent holds that is NOT
+     directly observable — e.g. private valuation range, hard budget constraint, cost.
+     BAD (motivation/intent): "Strategic motivation to manipulate anchoring"
+     BAD (future action):     "Will submit a higher bid than stated"
+     GOOD (private state):    "Private valuation is constrained to ≤2"
+   - If the behavior describes a future action rather than a hidden private state,
+     classify it as CONDITIONAL or discard it.
 
 Output strictly as JSON:
 ```json
 {{
   "structured_observations": [
+    {{
+      "type": "INFERENCE",
+      "public_action": "Opponent declares a numeric bid ceiling in chat",
+      "underlying_driver": "Private valuation is constrained to at most the stated ceiling"
+    }},
     {{
       "type": "CONDITIONAL",
       "game_state": "Opponent proposed an equal split",
@@ -159,7 +210,7 @@ Output strictly as JSON:
     }},
     {{
       "type": "UNCONDITIONAL",
-      "behavior": "Aggressively bids on the first item regardless of value"
+      "behavior": "Consistently opens negotiation by requesting the maximum share before any counter-offers are made"
     }}
   ]
 }}
@@ -510,6 +561,9 @@ The memory entry must have:
      It is better to leave a minor observation out than to pollute the memory
      with an unrelated behavior.
 
+SELF-REVIEW (mandatory before output):
+Review your bullet list. If any two bullets describe the same underlying behavioral tendency worded differently, merge them into the more comprehensive one and sum their counts. A new bullet is only justified if the underlying behavior is genuinely distinct from all existing bullets. Do not output duplicate or redundant bullets under any circumstances.
+
 Output strictly as JSON:
 ```json
 {{
@@ -593,6 +647,9 @@ The memory entry must have:
      It is better to produce a clean, focused memory for the established trigger
      than to create a bloated, incoherent one.
 
+SELF-REVIEW (mandatory before output):
+Review your bullet list. If any two bullets describe the same opponent action in response to the trigger (worded differently), merge them into the more comprehensive one and sum their counts. A new bullet is only justified if the opponent's action is genuinely different from all existing ones. Do not output duplicate or redundant bullets under any circumstances.
+
 Output strictly as JSON:
 ```json
 {{
@@ -674,6 +731,9 @@ The memory entry must have:
      It is better to produce a clean, focused memory for the established action
      than to mix unrelated public actions into one incoherent entry.
 
+SELF-REVIEW (mandatory before output):
+Review your bullet list. If any two bullets describe the same hidden private state worded differently, merge them into the more comprehensive one and sum their counts. A new bullet is only justified if the underlying hidden state is genuinely distinct from all existing ones. Do not output duplicate or redundant bullets under any circumstances.
+
 Output strictly as JSON:
 ```json
 {{
@@ -703,3 +763,194 @@ STEP_B_PROMPTS = {
 # Step C is handled programmatically: memories are sorted by total evidence
 # and concatenated directly. See _run_step_C in consolidated_pqa_agent.py.
 # =============================================================================
+
+
+# =============================================================================
+# BATCH (Step D): Cross-component deduplication — one prompt per observation type
+# =============================================================================
+
+CPQA_DEDUP_PROMPT_UNCONDITIONAL = """\
+You are auditing a set of UNCONDITIONAL memory components about an opponent.
+Your task: identify any duplicate or near-duplicate components and merge them.
+
+=== GAME RULES ===
+{game_rules}
+
+=== ALL EXISTING UNCONDITIONAL MEMORY COMPONENTS ===
+{all_memories_block}
+
+=== YOUR TASK ===
+
+Each UNCONDITIONAL memory tracks a distinct behavioral DIMENSION — an observable
+category of behavior that the opponent exhibits regardless of game state.
+
+Review every pair of components and identify groups that:
+  - Track the SAME behavioral dimension or topic (even if named differently)
+  - Would be better represented as a SINGLE component with richer bullets
+
+For each duplicate group:
+  1. Choose ONE component to KEEP (prefer the one with more total bullet count evidence).
+  2. Specify which to DISCARD.
+  3. Output a merged bullet list: combine all bullets from all discarded components into
+     the kept one. Merge any bullets describing the same underlying behavior (sum their
+     counts). Assign new sequential letter IDs (A, B, C, ...) to the merged list.
+  4. Update the name and description if needed to reflect the broader combined coverage.
+
+Conservative rules:
+  - Only merge components that track the SAME observable behavioral dimension.
+    Different behavioral dimensions must remain separate components.
+  - If two components are similar but could plausibly be distinct dimensions, do NOT merge.
+  - Do NOT merge just because both components involve the same game context or setting.
+
+Output strictly as JSON:
+```json
+{{
+  "groups": [
+    {{
+      "keep_id": "mem_abc123",
+      "discard_ids": ["mem_def456"],
+      "updated_name": "...",
+      "updated_description": "...",
+      "updated_anchor": "",
+      "updated_bullets": [
+        {{"id": "A", "description": "...", "count": 7}},
+        {{"id": "B", "description": "...", "count": 3}}
+      ],
+      "reason": "Both track the same behavioral dimension: ..."
+    }}
+  ]
+}}
+```
+
+If no components should be merged, output:
+```json
+{{"groups": []}}
+```
+"""
+
+CPQA_DEDUP_PROMPT_CONDITIONAL = """\
+You are auditing a set of CONDITIONAL memory components about an opponent.
+Your task: identify any duplicate or near-duplicate components and merge them.
+
+=== GAME RULES ===
+{game_rules}
+
+=== ALL EXISTING CONDITIONAL MEMORY COMPONENTS ===
+{all_memories_block}
+
+=== YOUR TASK ===
+
+Each CONDITIONAL memory tracks opponent behavior triggered by ONE specific game state.
+Its anchor describes the trigger, and its bullets describe different actions the opponent
+may take when that trigger fires.
+
+Review every pair of components and identify groups that:
+  - Share the SAME game state trigger (even if the anchor is worded differently)
+  - Would be better represented as a SINGLE component with one canonical anchor
+
+For each duplicate group:
+  1. Choose ONE component to KEEP (prefer the one with more total bullet count evidence).
+  2. Specify which to DISCARD.
+  3. Determine the most precise and general anchor that covers all components in the group.
+  4. Output a merged bullet list: combine all bullets from all discarded components.
+     Merge any bullets describing the same opponent action (sum their counts).
+     Assign new sequential letter IDs.
+  5. Update the name and description if needed.
+
+Conservative rules:
+  - Only merge components whose triggers describe the SAME game event or state.
+    Components with different triggers must remain separate.
+  - If two triggers are related but describe different specific events, do NOT merge.
+
+Output strictly as JSON:
+```json
+{{
+  "groups": [
+    {{
+      "keep_id": "mem_abc123",
+      "discard_ids": ["mem_def456"],
+      "updated_name": "...",
+      "updated_description": "...",
+      "updated_anchor": "the single canonical trigger",
+      "updated_bullets": [
+        {{"id": "A", "description": "action variant A", "count": 7}},
+        {{"id": "B", "description": "action variant B", "count": 3}}
+      ],
+      "reason": "Both are triggered by the same game state: ..."
+    }}
+  ]
+}}
+```
+
+If no components should be merged, output:
+```json
+{{"groups": []}}
+```
+"""
+
+CPQA_DEDUP_PROMPT_INFERENCE = """\
+You are auditing a set of INFERENCE memory components about an opponent.
+Your task: identify any duplicate or near-duplicate components and merge them.
+
+=== GAME RULES ===
+{game_rules}
+
+=== ALL EXISTING INFERENCE MEMORY COMPONENTS ===
+{all_memories_block}
+
+=== YOUR TASK ===
+
+Each INFERENCE memory tracks what hidden private state can be deduced from ONE specific
+observable public action. Its anchor describes the public action, and its bullets describe
+the different hidden private states that action may reveal.
+
+Review every pair of components and identify groups that:
+  - Are anchored to the SAME class of public action (even if worded differently)
+  - Would be better represented as a SINGLE component with one canonical anchor
+
+For each duplicate group:
+  1. Choose ONE component to KEEP (prefer the one with more total bullet count evidence).
+  2. Specify which to DISCARD.
+  3. Determine the most precise and general anchor (public action class) that covers all.
+  4. Output a merged bullet list: combine all hidden-state bullets from all components.
+     Merge any bullets describing the same hidden state (sum their counts).
+     Assign new sequential letter IDs.
+  5. Update the name and description if needed.
+
+Conservative rules:
+  - Only merge components anchored to the SAME class of observable public action.
+    Different public actions must remain separate components.
+  - Do NOT merge just because two actions both occur in pre-bid chat, for example.
+    The specific action class must be the same.
+
+Output strictly as JSON:
+```json
+{{
+  "groups": [
+    {{
+      "keep_id": "mem_abc123",
+      "discard_ids": ["mem_def456"],
+      "updated_name": "...",
+      "updated_description": "...",
+      "updated_anchor": "the single canonical public action class",
+      "updated_bullets": [
+        {{"id": "A", "description": "hidden state A", "count": 7}},
+        {{"id": "B", "description": "hidden state B", "count": 3}}
+      ],
+      "reason": "Both are anchored to the same public action: ..."
+    }}
+  ]
+}}
+```
+
+If no components should be merged, output:
+```json
+{{"groups": []}}
+```
+"""
+
+STEP_D_PROMPTS = {
+    "UNCONDITIONAL": CPQA_DEDUP_PROMPT_UNCONDITIONAL,
+    "CONDITIONAL":   CPQA_DEDUP_PROMPT_CONDITIONAL,
+    "INFERENCE":     CPQA_DEDUP_PROMPT_INFERENCE,
+}

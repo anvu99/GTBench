@@ -1,0 +1,7 @@
+llm_model_path: google/gemma-4-31b-it
+model_type: VLLMServerModel
+nick_name: gemma-4-31b
+max_tokens: 16384
+timeout: 600
+enable_thinking: true
+base_url: http://localhost:8001/v1

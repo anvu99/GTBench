@@ -28,10 +28,10 @@ def get_step_env_regex_and_format(env_name, turn_type=None):
             format = '<Utterance: [a, b, c]> e.g., <Utterance: [4, 2, 1]>'
         elif turn_type == 'Proposal':
             regex = r'(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
-            format = '<Proposal: [a, b, c]> e.g., <Proposal: [1, 2, 3]> or <agree>'
+            format = '<Proposal: [a, b, c]> e.g., <Proposal: [1, 2, 3]> or <Agree>'
         else:
             regex = r'(<(?:agree|Agree|AGREE)>|<Proposal:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>|<Utterance:\s*\[\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\]>)'
-            format = '<Proposal|Utterance: [a, b, c]> e.g., <Proposal: [1, 2, 3]> <Utterance: [4, 2, 1]> or <agree>'
+            format = '<Proposal|Utterance: [a, b, c]> e.g., <Proposal: [1, 2, 3]> <Utterance: [4, 2, 1]> or <Agree>'
     elif env_name == 'first_sealed_auction':
         # Allow optional decimals in case the LLM hallucinates a float bid like <0.5>
         regex = r'<(?:[0-9]+(?:\.[0-9]+)?|10)>'

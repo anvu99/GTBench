@@ -114,6 +114,11 @@ def strip_thinking_block(text: str) -> str:
 
     # DeepSeek/Qwen3 sometimes start generation AFTER the <think> tag,
     # meaning the output only contains the closing </think> tag.
+    if '</thinking>' in text:
+        text = text.rsplit('</thinking>', 1)[-1]
+    elif '<thinking>' in text:
+        text = text.split('<thinking>', 1)[0]
+
     if '</think>' in text:
         # Split on the closing tag and keep everything after the final one
         text = text.rsplit('</think>', 1)[-1]
@@ -258,14 +263,14 @@ def query_with_thinking_validation(model, messages, stop=None, prompt_type='move
     thinking_enabled = getattr(model, 'enable_thinking', False)
     
     retries = 0
-    while thinking_enabled and not any(tag in raw_generation for tag in ["<think>", "</think>", "<thought>", "</thought>"]) and retries < max_retries:
+    while thinking_enabled and not any(tag in raw_generation for tag in ["<think>", "</think>", "<thought>", "</thought>", "<thinking>", "</thinking>"]) and retries < max_retries:
         retries += 1
         if hasattr(model, 'logger') and model.logger:
             model.logger.warning(f"Missing thinking tag in generation, retrying ({retries}/{max_retries})...")
         generations, _, _ = model.query(messages, n=1, stop=stop, prompt_type=prompt_type)
         raw_generation = generations[0]
         
-    if thinking_enabled and not any(tag in raw_generation for tag in ["<think>", "</think>", "<thought>", "</thought>"]):
+    if thinking_enabled and not any(tag in raw_generation for tag in ["<think>", "</think>", "<thought>", "</thought>", "<thinking>", "</thinking>"]):
         if hasattr(model, 'logger') and model.logger:
             model.logger.error("Failed to generate thinking tags after retries. Returning empty string.")
         return ""

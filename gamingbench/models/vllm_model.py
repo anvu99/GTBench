@@ -112,6 +112,9 @@ class VLLMModel(BaseModel):
         self.temperature = getattr(config, 'temperature', 0.7)
         self.enable_thinking = getattr(config, 'enable_thinking', True)
         self.thinking_budget = getattr(config, 'thinking_budget', 4096)
+        # Sampling seed for reproducibility. When set, vLLM seeds its RNG
+        # per-request so the same prompt + seed yields the same output.
+        self.llm_seed = getattr(config, 'llm_seed', None)
         
         tensor_parallel_size = getattr(config, 'tensor_parallel_size', 1)
         max_model_len = getattr(config, 'max_model_len', 32768)
@@ -155,6 +158,7 @@ class VLLMModel(BaseModel):
                 repetition_penalty=1.0,
                 max_tokens=self.max_tokens,
                 thinking_token_budget=self.thinking_budget,
+                seed=self.llm_seed,
             )
         elif self.is_qwen3:
             # No-thinking mode parameters recommended for Qwen3
@@ -166,11 +170,13 @@ class VLLMModel(BaseModel):
                 presence_penalty=1.5,
                 repetition_penalty=1.0,
                 max_tokens=self.max_tokens,
+                seed=self.llm_seed,
             )
         else:
             self.sampling_params = SamplingParams(
                 temperature=self.temperature, 
-                max_tokens=self.max_tokens
+                max_tokens=self.max_tokens,
+                seed=self.llm_seed,
             )
 
     def __deepcopy__(self, memo):
@@ -285,7 +291,8 @@ class VLLMModel(BaseModel):
                 repetition_penalty=params.repetition_penalty,
                 max_tokens=safe_max_tokens,
                 thinking_token_budget=budget,
-                stop=stop_seqs
+                stop=stop_seqs,
+                seed=self.llm_seed,
             )
 
         results = self.engine.generate(prompt, params, request_id)

@@ -192,10 +192,13 @@ class BuySellGame:
 
             elif action_type == "ACCEPT":
                 if last_proposed_price is None:
-                    # Cannot accept when there's no proposal yet — treat as invalid
+                    # Cannot accept when there's no proposal yet — treat as invalid/abnormal
                     logger.warning(
-                        f"Player {player_idx} tried to ACCEPT with no prior proposal. Treating as REJECT."
+                        f"Player {player_idx} tried to ACCEPT with no prior proposal. Treating as Abnormal."
                     )
+                    match.status = "Abnormal"
+                    self.status = "Abnormal"
+                    match.agents_at_fault.append(agent.agent_name)
                     game_over = True
                 else:
                     agreed_price = last_proposed_price
@@ -342,10 +345,16 @@ class BuySellGame:
             proposer_role = roles[last_proposer_idx]
             offer_str = f"${last_price} (proposed by {proposer_role})"
 
+        if last_price is None:
+            available_actions = "<PROPOSE: X> (replace X with your price)"
+        else:
+            available_actions = "<PROPOSE: X> (replace X with your price) | <ACCEPT> | <REJECT>"
+
         return (
             f"Role={role}, {val_label}, "
             f"Turn={turn}/{self.max_rounds}, "
-            f"Last offer={offer_str}"
+            f"Last offer={offer_str} | "
+            f"Available actions: {available_actions}"
         )
 
     def _build_final_board_str(self, results, roles) -> str:

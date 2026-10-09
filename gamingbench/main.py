@@ -43,7 +43,7 @@ def get_args():
     parser.add_argument('--api-keys', default='', nargs='+')
 
     parser.add_argument('--exchange-first-player',
-                        default=False, action='store_true')
+                        default=True, action='store_true')
     parser.add_argument('--num-workers', default=1, type=int)
     parser.add_argument('--threshold-matches', default=50, type=int)
     parser.add_argument('--enable-chat', default=False, action='store_true', help='Enable chat feature for agents')
@@ -64,12 +64,71 @@ def get_args():
     parser.add_argument('--sw-anti-contradiction', default=False, action='store_true',
                         help='Enable anti-contradiction mode for SlidingWindowAgent.')
     parser.add_argument('--sw-memory-mode', type=str, default='',
-                        help='Memory mode for SlidingWindowAgent: reputation | strategy | dual | dual-structured. Empty string = default (bullet-list reputation).')
+                        help='Memory mode for SlidingWindowAgent: reputation | strategy | dual | dual-structured | structured. '
+                             'structured = dual-call (reputation then strategy); strategy brief uses DEFAULT/CONDITIONAL/AVOID format. '
+                             'Empty string = default (bullet-list reputation).')
     parser.add_argument('--sw-track-frequency', default=False, action='store_true',
                         help='Enable per-observation frequency counting in SlidingWindowAgent memory updates.')
+    parser.add_argument('--sw-trajectory-select', type=str, default='',
+                        choices=['', 'best', 'worst', 'random', 'best_worst'],
+                        help='Trajectory selection mode for SWA memory update: '
+                             'best = top 8 by score, worst = bottom 8, random = random 8, '
+                             'best_worst = top 4 + bottom 4 passed separately to synthesis prompt. '
+                             'Requires --batch-size 16.')
+    parser.add_argument('--sw-trajectories-included', type=int, default=8,
+                        help='Number of trajectories to include when using '
+                             '--sw-trajectory-select best/worst/random. Default: 8.')
+    parser.add_argument('--sw-trajectory-balanced', default=False, action='store_true',
+                        help='When used with --sw-trajectory-select, balance selected '
+                             'trajectories across roles (e.g. 4 Seller + 4 Buyer in buy_sell_game).')
+    parser.add_argument('--sw-explore-batch', type=int, default=0,
+                        help='Size of the first (exploration) batch. When set, the first batch '
+                             'uses this many games instead of --batch-size, giving the agent '
+                             'more room to explore before its first memory update. '
+                             'Subsequent batches use --batch-size as normal. 0 = disabled.')
+    parser.add_argument('--st-use-confidence', default=False, action='store_true',
+                        help='Enable confidence-scored strategy mode for SimpleTendencyAgent.')
+    parser.add_argument('--st-use-explore', default=False, action='store_true',
+                        help='Enable exploration mode with best-strategy version tracking for SimpleTendencyAgent.')
+    parser.add_argument('--st-use-memory-only', default=False, action='store_true',
+                        help='Memory-only mode for SimpleTendencyAgent: skip strategy synthesis '
+                             'and inject raw reputation memory directly into the in-game prompt.')
+    parser.add_argument('--llm-seed', type=int, default=None,
+                        help='Seed for LLM sampling reproducibility. When set, vLLM seeds its RNG '
+                             'per-request so the same prompt + seed yields the same output. '
+                             'Overridden by llm_seed in the model YAML config if present.')
+    parser.add_argument('--sw-explore-strategy', default=False, action='store_true',
+                        help='Exploration mode for SlidingWindowAgent dual memory: tracks per-version '
+                             'strategy utility, shows the best-performing strategy in the strategy '
+                             'update prompt, and lets the LLM EVOLVE or [INHERIT BEST]. '
+                             'Requires --sw-memory-mode dual.')
+    parser.add_argument('--sw-deterministic-explore', default=False, action='store_true',
+                        help='Deterministic exploration mode for SlidingWindowAgent: detects plateaus '
+                             'using a patience window on batch averages and forces a 1-batch contrastive '
+                             'exploration to break memory anchor.')
     args = parser.parse_args()
 
+    if args.sw_explore_strategy:
+        if args.sw_memory_mode not in ('dual', 'strategy'):
+            parser.error('--sw-explore-strategy requires --sw-memory-mode dual or strategy')
+        if args.sw_trajectory_select == 'best_worst':
+            parser.error('--sw-explore-strategy is not supported with --sw-trajectory-select best_worst')
+
     return args
+
+
+def _flush_agent_batch(batch_agent, agent_data, agent_items):
+    """Call flush_batch_updates, passing per-game utilities for SW explore mode.
+
+    Utilities come from ALL games in the batch (agent_items), not only the
+    selected trajectories, because version tracking measures the strategy's
+    true average performance.
+    """
+    if getattr(batch_agent, 'sw_explore_strategy', False) or getattr(batch_agent, 'sw_deterministic_explore', False):
+        utilities = [item[2] for item in agent_items if len(item) >= 3]
+        batch_agent.flush_batch_updates(agent_data, utilities=utilities)
+    else:
+        batch_agent.flush_batch_updates(agent_data)
 
 
 def _get_agent_store_path(agent):
@@ -338,6 +397,9 @@ def run_game(game_name):
 
     for i, (a, m) in enumerate(zip(agents, models)):
         m.nick_name = f"Player {i+1}"
+        # Inject CLI --llm-seed into model if not already set via YAML config
+        if getattr(args, 'llm_seed', None) is not None and getattr(m, 'llm_seed', None) is None:
+            m.llm_seed = args.llm_seed
         a.set_model(m)
         a.player_id = f"p{i}"
         a.current_game_name = game_name.lower()
@@ -358,6 +420,20 @@ def run_game(game_name):
             a.sw_memory_mode = args.sw_memory_mode
         if hasattr(a, 'sw_track_frequency'):
             a.sw_track_frequency = getattr(args, 'sw_track_frequency', False)
+        if hasattr(a, 'sw_trajectory_select'):
+            a.sw_trajectory_select = getattr(args, 'sw_trajectory_select', '')
+        if hasattr(a, 'sw_trajectory_balanced'):
+            a.sw_trajectory_balanced = getattr(args, 'sw_trajectory_balanced', False)
+        if hasattr(a, 'sw_explore_strategy'):
+            a.sw_explore_strategy = getattr(args, 'sw_explore_strategy', False)
+        if hasattr(a, 'sw_deterministic_explore'):
+            a.sw_deterministic_explore = getattr(args, 'sw_deterministic_explore', False)
+        if hasattr(a, 'st_use_confidence'):
+            a.st_use_confidence = getattr(args, 'st_use_confidence', False)
+        if hasattr(a, 'st_use_explore'):
+            a.st_use_explore = getattr(args, 'st_use_explore', False)
+        if hasattr(a, 'st_use_memory_only'):
+            a.st_use_memory_only = getattr(args, 'st_use_memory_only', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -391,6 +467,7 @@ def run_game(game_name):
 
     lock = threading.Lock()
     batch_size = getattr(args, 'batch_size', 1)
+    explore_batch_size = getattr(args, 'sw_explore_batch', 0)
 
     if batch_size > 1:
         # ── Batch mode ────────────────────────────────────────────────────────
@@ -410,8 +487,10 @@ def run_game(game_name):
                     seen_store_paths.add(store_path)
                     batch_agents.append(a)
         results = []
-        for batch_start in range(start_match_idx, args.num_matches, batch_size):
-            batch_end = min(batch_start + batch_size, args.num_matches)
+        for batch_start in _batch_starts(start_match_idx, args.num_matches, batch_size, explore_batch_size):
+            # Use explore_batch_size for the first batch, normal batch_size after
+            current_batch_size = explore_batch_size if (explore_batch_size > 0 and batch_start == start_match_idx) else batch_size
+            batch_end = min(batch_start + current_batch_size, args.num_matches)
             batch_q = queue.Queue()  # thread-safe gradient data collector
 
             # Freeze the current memory store state for all games in this batch
@@ -485,6 +564,7 @@ def run_game(game_name):
                             break
                 from gamingbench.prompts.observation_prompts import construct_game_intro
                 flushed_paths = set()
+                sw_traj_select = getattr(args, 'sw_trajectory_select', '')
                 for batch_agent in batch_agents:
                     batch_agent.current_game_name = game_name.lower()
                     if not getattr(batch_agent, 'current_game_intro', None):
@@ -494,10 +574,100 @@ def run_game(game_name):
                     if store_path in flushed_paths:
                         continue
                     
-                    agent_data = [d for p_path, d in gradient_data if p_path == store_path]
-                    if agent_data:
-                        flushed_paths.add(store_path)
-                        batch_agent.flush_batch_updates(agent_data)
+                    # gradient_data items are (path, history, score) tuples
+                    # when trajectory selection is active, otherwise (path, history) for backward compat
+                    agent_items = [item for item in gradient_data if item[0] == store_path]
+                    
+                    if agent_items and sw_traj_select and len(agent_items[0]) >= 3:
+                        # Trajectory selection: pick from the batch based on score
+                        scored = [(item[1], item[2]) for item in agent_items]  # (history, score)
+                        
+                        log_file = store_path.replace('.json', '_trace.log') if store_path else None
+                        sw_traj_balanced = getattr(args, 'sw_trajectory_balanced', False)
+                        
+                        if sw_traj_select == 'best_worst':
+                            game_name_lower = game_name.lower()
+                            if 'buy_sell' in game_name_lower:
+                                threshold = 10.01
+                            elif 'negotiation' in game_name_lower:
+                                threshold = 50.0
+                            elif 'first_sealed' in game_name_lower:
+                                threshold = 0.01
+                            else:
+                                all_scores = [s for _, s in scored]
+                                threshold = sum(all_scores) / len(all_scores) if all_scores else 0.0
+
+                            pool_winning = [(h, s) for h, s in scored if s >= threshold]
+                            pool_losing = [(h, s) for h, s in scored if s < threshold]
+                            
+                            sw_traj_incl = getattr(args, 'sw_trajectories_included', 8)
+                            target_win, target_lose = sw_traj_incl // 2, sw_traj_incl - (sw_traj_incl // 2)
+                            quota_win = min(target_win, len(pool_winning))
+                            quota_lose = min(target_lose, len(pool_losing))
+                            
+                            if quota_lose < target_lose:
+                                quota_win = min(len(pool_winning), quota_win + (target_lose - quota_lose))
+                            elif quota_win < target_win:
+                                quota_lose = min(len(pool_losing), quota_lose + (target_win - quota_win))
+                                
+                            if sw_traj_balanced:
+                                winning = _get_top_k_balanced(pool_winning, quota_win, reverse=True)
+                                losing = _get_top_k_balanced(pool_losing, quota_lose, reverse=False)
+                            else:
+                                pool_winning.sort(key=lambda x: x[1], reverse=True)
+                                pool_losing.sort(key=lambda x: x[1], reverse=False)
+                                winning = pool_winning[:quota_win]
+                                losing = pool_losing[:quota_lose]
+                                
+                            scored_sorted = sorted(scored, key=lambda x: x[1], reverse=True)
+                            excluded = [item for item in scored_sorted if item not in winning and item not in losing]
+                            
+                            if log_file:
+                                with open(log_file, 'a') as f:
+                                    f.write(f'=== TRAJECTORY SELECTION (mode=best_worst, batch_start={batch_start}) ===\n')
+                                    f.write(f'Total games: {len(scored)}, Hardcoded Threshold: {threshold:.2f}\n')
+                                    f.write(f'Winning (Quota={quota_win}): {len(winning)}, Losing (Quota={quota_lose}): {len(losing)}\n')
+                                    f.write(f'Winning scores: {[s for _, s in winning]}\n')
+                                    f.write(f'Losing scores: {[s for _, s in losing]}\n')
+                                    f.write(f'Excluded scores: {[s for _, s in excluded]}\n')
+                                    f.write('=' * 50 + '\n\n')
+                            
+                            flushed_paths.add(store_path)
+                            batch_agent.flush_batch_updates_best_worst(winning, losing)
+                        else:
+                            select_n = min(getattr(args, 'sw_trajectories_included', 8), len(scored))
+                            if sw_traj_balanced:
+                                selected, excluded = _balanced_trajectory_select(
+                                    scored, select_n, sw_traj_select, batch_start, args.seed)
+                            else:
+                                selected, excluded = _flat_trajectory_select(
+                                    scored, select_n, sw_traj_select, batch_start, args.seed)
+                            
+                            agent_data = [h for h, s in selected]
+                            
+                            # Log selection details
+                            if log_file:
+                                with open(log_file, 'a') as f:
+                                    balanced_tag = ' [BALANCED]' if sw_traj_balanced else ''
+                                    f.write(f'=== TRAJECTORY SELECTION (mode={sw_traj_select}{balanced_tag}, batch_start={batch_start}) ===\n')
+                                    f.write(f'Total games: {len(scored)}, Selected: {len(selected)}\n')
+                                    if sw_traj_balanced:
+                                        sel_roles = ['Seller' if 'Role=Seller' in h else 'Buyer' if 'Role=Buyer' in h else '?' for h, _ in selected]
+                                        f.write(f'Selected roles: {sel_roles}\n')
+                                    f.write(f'Selected scores: {[s for _, s in selected]}\n')
+                                    f.write(f'Excluded scores: {[s for _, s in excluded]}\n')
+                                    f.write('=' * 50 + '\n\n')
+                            
+                            if agent_data:
+                                flushed_paths.add(store_path)
+                                _flush_agent_batch(batch_agent, agent_data, agent_items)
+                    else:
+                        # No trajectory selection: use all histories (backward compatible)
+                        agent_data = [item[1] for item in agent_items]
+                    
+                        if agent_data:
+                            flushed_paths.add(store_path)
+                            _flush_agent_batch(batch_agent, agent_data, agent_items)
 
         results = [r[0] for r in results]
 
@@ -565,6 +735,153 @@ def pick_out_invalid_matches(results):
     return invalid_matches_param
 
 
+def _batch_starts(start_idx, num_matches, batch_size, explore_batch_size=0):
+    """Generate batch start indices, optionally using a larger first batch.
+    
+    If explore_batch_size > 0, the first batch spans [start_idx, start_idx + explore_batch_size),
+    then subsequent batches use the normal batch_size.
+    If explore_batch_size == 0, behaves identically to range(start_idx, num_matches, batch_size).
+    
+    Args:
+        start_idx: starting match index (usually 0, or resuming from a checkpoint)
+        num_matches: total number of matches to play
+        batch_size: normal batch size for batches 2, 3, ...
+        explore_batch_size: size of the first (exploration) batch; 0 = disabled
+    
+    Yields:
+        batch_start indices
+    """
+    pos = start_idx
+    first = True
+    while pos < num_matches:
+        yield pos
+        if first and explore_batch_size > 0:
+            pos += explore_batch_size
+            first = False
+        else:
+            pos += batch_size
+
+
+def _flat_trajectory_select(scored, select_n, mode, batch_start, seed):
+    """Select trajectories using a single flat list (original behavior).
+    
+    Args:
+        scored: list of (history, score) tuples
+        select_n: number to select
+        mode: 'best' | 'worst' | 'random'
+        batch_start: batch start index (for random seed)
+        seed: base seed
+    
+    Returns:
+        (selected, excluded) tuple of lists of (history, score)
+    """
+    if mode == 'best':
+        scored_sorted = sorted(scored, key=lambda x: x[1], reverse=True)
+        return scored_sorted[:select_n], scored_sorted[select_n:]
+    elif mode == 'worst':
+        scored_sorted = sorted(scored, key=lambda x: x[1])
+        return scored_sorted[:select_n], scored_sorted[select_n:]
+    elif mode == 'random':
+        import random as _rnd
+        rng = _rnd.Random(batch_start + seed)
+        indices = list(range(len(scored)))
+        rng.shuffle(indices)
+        selected = [scored[i] for i in indices[:select_n]]
+        excluded = [scored[i] for i in indices[select_n:]]
+        return selected, excluded
+    else:
+        return list(scored), []
+
+def _get_top_k_balanced(pool, quota, reverse=True):
+    if not pool:
+        return []
+    sellers = sorted([x for x in pool if 'Role=Seller' in x[0]], key=lambda x: x[1], reverse=reverse)
+    buyers = sorted([x for x in pool if 'Role=Buyer' in x[0]], key=lambda x: x[1], reverse=reverse)
+    unknown = sorted([x for x in pool if 'Role=Seller' not in x[0] and 'Role=Buyer' not in x[0]], key=lambda x: x[1], reverse=reverse)
+    
+    half = quota // 2
+    take_s = min(half, len(sellers))
+    take_b = min(half, len(buyers))
+    
+    deficit_s = half - take_s
+    deficit_b = half - take_b
+    
+    take_s = min(len(sellers), take_s + deficit_b)
+    take_b = min(len(buyers), take_b + deficit_s)
+    
+    selected = sellers[:take_s] + buyers[:take_b]
+    
+    remaining = quota - len(selected)
+    if remaining > 0:
+        leftovers = sellers[take_s:] + buyers[take_b:] + unknown
+        leftovers.sort(key=lambda x: x[1], reverse=reverse)
+        selected.extend(leftovers[:remaining])
+        
+    return selected
+
+
+def _balanced_trajectory_select(scored, select_n, mode, batch_start, seed):
+    """Select trajectories while balancing across roles.
+    
+    Partitions games by role (detecting 'Role=Seller'/'Role=Buyer' in the
+    history string for buy_sell_game), then applies the selection mode within
+    each group independently to guarantee equal representation.
+    
+    Falls back to flat selection if role markers are not found.
+    
+    Args:
+        scored: list of (history, score) tuples
+        select_n: total number to select (will be split evenly across groups)
+        mode: 'best' | 'worst' | 'random'
+        batch_start: batch start index (for random seed)
+        seed: base seed
+    
+    Returns:
+        (selected, excluded) tuple of lists of (history, score)
+    """
+    # Partition by role
+    group_seller = []
+    group_buyer = []
+    group_unknown = []
+    
+    for h, s in scored:
+        if 'Role=Seller' in h:
+            group_seller.append((h, s))
+        elif 'Role=Buyer' in h:
+            group_buyer.append((h, s))
+        else:
+            group_unknown.append((h, s))
+    
+    # If we can't detect roles, fall back to flat selection
+    if not group_seller or not group_buyer:
+        return _flat_trajectory_select(scored, select_n, mode, batch_start, seed)
+    
+    # Split select_n evenly across groups
+    per_group = select_n // 2
+    
+    # Select from each group independently
+    sel_a, exc_a = _flat_trajectory_select(group_seller, min(per_group, len(group_seller)), mode, batch_start, seed)
+    sel_b, exc_b = _flat_trajectory_select(group_buyer, min(per_group, len(group_buyer)), mode, batch_start, seed + 1)
+    
+    # If one group is short, take extra from the other
+    total_selected = len(sel_a) + len(sel_b)
+    if total_selected < select_n:
+        deficit = select_n - total_selected
+        # Try to fill from the group that has more excluded items
+        if len(exc_a) >= deficit:
+            sel_a.extend(exc_a[:deficit])
+            exc_a = exc_a[deficit:]
+        elif len(exc_b) >= deficit:
+            sel_b.extend(exc_b[:deficit])
+            exc_b = exc_b[deficit:]
+    
+    # Unknown-role games go to excluded
+    selected = sel_a + sel_b
+    excluded = exc_a + exc_b + group_unknown
+    
+    return selected, excluded
+
+
 def run_match(params):
     match_idx = params['match_idx']
     game_name = params['game_name']
@@ -590,6 +907,11 @@ def run_match(params):
 
     # forced_chance_actions: OpenSpiel private deals (valuations, card hands, dice).
     game.forced_chance_actions = list(game_state.get('forced_chance_actions', []))
+
+    # Set a per-match isolated RNG for any runtime chance nodes
+    # (tie-breakers, mid-game dice rolls) that appear after
+    # forced_chance_actions are exhausted.
+    game._rng = _random_mod.Random(args.seed + match_idx)
 
     # hanabi_seed: deterministic card deal for the hanabi_learning_environment backend.
     if 'hanabi_seed' in game_state:
@@ -629,6 +951,22 @@ def run_match(params):
         with open(result_path, 'a') as file:
             file.writelines(json.dumps(res) + '\n')
 
+    # ── Extract per-agent scores for trajectory selection ──────────────────────
+    match_data = res.get('matches', [{}])[0]
+    winner_name = match_data.get('winner', '')
+    winner_score = match_data.get('winner_score', 0) or 0
+    loser_score = match_data.get('loser_score', 0) or 0
+    for i, agent in enumerate(agents):
+        agent_name = getattr(agent, 'agent_name', f'Agent{i}')
+        model_name = models[i].nick_name if i < len(models) else ''
+        full_name = f"{agent_name}_{model_name}"
+        if winner_name == "":
+            agent._match_score = winner_score
+        elif full_name in winner_name:
+            agent._match_score = winner_score
+        else:
+            agent._match_score = loser_score
+
     # ── Batch mode: deposit gradient data into the shared queue ──────────────
     # Check BOTH agents and reversed_agents: for odd matches (exchange_first_player)
     # the game runs with reversed_agents, so the LTM clone in reversed_agents has
@@ -638,7 +976,8 @@ def run_match(params):
         all_agents_in_match = list(params.get('agents', []))
         for agent in all_agents_in_match:
             if getattr(agent, 'batch_mode', False) and agent._last_batch_result is not None:
-                batch_queue.put((getattr(agent, '_parent_store_path', None), agent._last_batch_result))
+                score = getattr(agent, '_match_score', 0)
+                batch_queue.put((getattr(agent, '_parent_store_path', None), agent._last_batch_result, score))
                 agent._last_batch_result = None
 
     return (res, params)
@@ -741,13 +1080,29 @@ def run_match_nplayer(params):
     finally:
         utils.remove_game_log_handler(game_log_handler)
         
+    # ── Extract per-agent scores for trajectory selection ──────────────────────
+    winner_name = match_dict.get('winner', '')
+    winner_score = match_dict.get('winner_score', 0) or 0
+    loser_score = match_dict.get('loser_score', 0) or 0
+    for i, agent in enumerate(agents):
+        agent_name = getattr(agent, 'agent_name', f'Agent{i}')
+        model_name = models[i].nick_name if i < len(models) else ''
+        full_name = f"{agent_name}_{model_name}"
+        if winner_name == "":
+            agent._match_score = winner_score
+        elif full_name in winner_name:
+            agent._match_score = winner_score
+        else:
+            agent._match_score = loser_score
+
     # ── Batch mode: deposit gradient data into the shared queue ──────────────
     batch_queue = params.get('batch_queue')
     if batch_queue is not None:
         all_agents_in_match = list(params.get('agents', []))
         for agent in all_agents_in_match:
             if getattr(agent, 'batch_mode', False) and agent._last_batch_result is not None:
-                batch_queue.put((getattr(agent, '_parent_store_path', None), agent._last_batch_result))
+                score = getattr(agent, '_match_score', 0)
+                batch_queue.put((getattr(agent, '_parent_store_path', None), agent._last_batch_result, score))
                 agent._last_batch_result = None
 
     return match_dict
@@ -795,6 +1150,9 @@ def run_game_nplayer(game_name):
 
     for i, (a, m) in enumerate(zip(agents, models)):
         m.nick_name = f"Player {i+1}"
+        # Inject CLI --llm-seed into model if not already set via YAML config
+        if getattr(args, 'llm_seed', None) is not None and getattr(m, 'llm_seed', None) is None:
+            m.llm_seed = args.llm_seed
         a.set_model(m)
         a.player_id = f"p{i}"
         a.current_game_name = game_name.lower()
@@ -815,6 +1173,18 @@ def run_game_nplayer(game_name):
             a.sw_memory_mode = args.sw_memory_mode
         if hasattr(a, 'sw_track_frequency'):
             a.sw_track_frequency = getattr(args, 'sw_track_frequency', False)
+        if hasattr(a, 'sw_trajectory_select'):
+            a.sw_trajectory_select = getattr(args, 'sw_trajectory_select', '')
+        if hasattr(a, 'sw_trajectory_balanced'):
+            a.sw_trajectory_balanced = getattr(args, 'sw_trajectory_balanced', False)
+        if hasattr(a, 'sw_explore_strategy'):
+            a.sw_explore_strategy = getattr(args, 'sw_explore_strategy', False)
+        if hasattr(a, 'st_use_confidence'):
+            a.st_use_confidence = getattr(args, 'st_use_confidence', False)
+        if hasattr(a, 'st_use_explore'):
+            a.st_use_explore = getattr(args, 'st_use_explore', False)
+        if hasattr(a, 'st_use_memory_only'):
+            a.st_use_memory_only = getattr(args, 'st_use_memory_only', False)
         if hasattr(a, 'set_storage_dir'):
             a.set_storage_dir(log_root)
 
@@ -833,6 +1203,7 @@ def run_game_nplayer(game_name):
 
     lock = threading.Lock()
     batch_size = getattr(args, 'batch_size', 1)
+    explore_batch_size = getattr(args, 'sw_explore_batch', 0)
     
     if batch_size > 1:
         # ── Batch mode ────────────────────────────────────────────────────────
@@ -845,8 +1216,9 @@ def run_game_nplayer(game_name):
                     seen_store_paths.add(store_path)
                     batch_agents.append(a)
         results = []
-        for batch_start in range(start_match_idx, args.num_matches, batch_size):
-            batch_end = min(batch_start + batch_size, args.num_matches)
+        for batch_start in _batch_starts(start_match_idx, args.num_matches, batch_size, explore_batch_size):
+            current_batch_size = explore_batch_size if (explore_batch_size > 0 and batch_start == start_match_idx) else batch_size
+            batch_end = min(batch_start + current_batch_size, args.num_matches)
             batch_q = queue.Queue()  # thread-safe gradient data collector
 
             memory_snapshots = {
@@ -921,6 +1293,7 @@ def run_game_nplayer(game_name):
                             break
                 from gamingbench.prompts.observation_prompts import construct_game_intro
                 flushed_paths = set()
+                sw_traj_select = getattr(args, 'sw_trajectory_select', '')
                 for batch_agent in batch_agents:
                     batch_agent.current_game_name = game_name.lower()
                     if not getattr(batch_agent, 'current_game_intro', None):
@@ -931,10 +1304,93 @@ def run_game_nplayer(game_name):
                     if store_path in flushed_paths:
                         continue
                         
-                    agent_data = [d for p_path, d in gradient_data if p_path == store_path]
-                    if agent_data:
-                        flushed_paths.add(store_path)
-                        batch_agent.flush_batch_updates(agent_data)
+                    agent_items = [item for item in gradient_data if item[0] == store_path]
+                    
+                    if agent_items and sw_traj_select and len(agent_items[0]) >= 3:
+                        scored = [(item[1], item[2]) for item in agent_items]
+                        sw_traj_balanced = getattr(args, 'sw_trajectory_balanced', False)
+                        log_file = store_path.replace('.json', '_trace.log') if store_path else None
+                        
+                        if sw_traj_select == 'best_worst':
+                            game_name_lower = game_name.lower()
+                            if 'buy_sell' in game_name_lower:
+                                threshold = 10.01
+                            elif 'negotiation' in game_name_lower:
+                                threshold = 50.0
+                            elif 'first_sealed' in game_name_lower:
+                                threshold = 0.01
+                            else:
+                                all_scores = [s for _, s in scored]
+                                threshold = sum(all_scores) / len(all_scores) if all_scores else 0.0
+
+                            pool_winning = [(h, s) for h, s in scored if s >= threshold]
+                            pool_losing = [(h, s) for h, s in scored if s < threshold]
+                            
+                            sw_traj_incl = getattr(args, 'sw_trajectories_included', 8)
+                            target_win, target_lose = sw_traj_incl // 2, sw_traj_incl - (sw_traj_incl // 2)
+                            quota_win = min(target_win, len(pool_winning))
+                            quota_lose = min(target_lose, len(pool_losing))
+                            
+                            if quota_lose < target_lose:
+                                quota_win = min(len(pool_winning), quota_win + (target_lose - quota_lose))
+                            elif quota_win < target_win:
+                                quota_lose = min(len(pool_losing), quota_lose + (target_win - quota_win))
+                                
+                            if sw_traj_balanced:
+                                winning = _get_top_k_balanced(pool_winning, quota_win, reverse=True)
+                                losing = _get_top_k_balanced(pool_losing, quota_lose, reverse=False)
+                            else:
+                                pool_winning.sort(key=lambda x: x[1], reverse=True)
+                                pool_losing.sort(key=lambda x: x[1], reverse=False)
+                                winning = pool_winning[:quota_win]
+                                losing = pool_losing[:quota_lose]
+                                
+                            scored_sorted = sorted(scored, key=lambda x: x[1], reverse=True)
+                            excluded = [item for item in scored_sorted if item not in winning and item not in losing]
+                            
+                            if log_file:
+                                with open(log_file, 'a') as f:
+                                    f.write(f'=== TRAJECTORY SELECTION (mode=best_worst, batch_start={batch_start}) ===\n')
+                                    f.write(f'Total games: {len(scored)}, Hardcoded Threshold: {threshold:.2f}\n')
+                                    f.write(f'Winning (Quota={quota_win}): {len(winning)}, Losing (Quota={quota_lose}): {len(losing)}\n')
+                                    f.write(f'Winning scores: {[s for _, s in winning]}\n')
+                                    f.write(f'Losing scores: {[s for _, s in losing]}\n')
+                                    f.write(f'Excluded scores: {[s for _, s in excluded]}\n')
+                                    f.write('=' * 50 + '\n\n')
+                            
+                            flushed_paths.add(store_path)
+                            batch_agent.flush_batch_updates_best_worst(winning, losing)
+                        else:
+                            select_n = min(getattr(args, 'sw_trajectories_included', 8), len(scored))
+                            if sw_traj_balanced:
+                                selected, excluded = _balanced_trajectory_select(
+                                    scored, select_n, sw_traj_select, batch_start, args.seed)
+                            else:
+                                selected, excluded = _flat_trajectory_select(
+                                    scored, select_n, sw_traj_select, batch_start, args.seed)
+                            
+                            agent_data = [h for h, s in selected]
+                            
+                            if log_file:
+                                with open(log_file, 'a') as f:
+                                    balanced_tag = ' [BALANCED]' if sw_traj_balanced else ''
+                                    f.write(f"=== BATCH SELECTION (Mode: {sw_traj_select}{balanced_tag}) ===\n")
+                                    f.write(f"Selected {len(selected)} out of {len(scored)} games.\n")
+                                    if sw_traj_balanced:
+                                        sel_roles = ['Seller' if 'Role=Seller' in h else 'Buyer' if 'Role=Buyer' in h else '?' for h, _ in selected]
+                                        f.write(f"Selected roles: {sel_roles}\n")
+                                    f.write("Selected scores: " + ", ".join(str(s) for h, s in selected) + "\n")
+                                    f.write("Excluded scores: " + ", ".join(str(s) for h, s in excluded) + "\n")
+                                    f.write("="*50 + "\n\n")
+                            
+                            if agent_data:
+                                flushed_paths.add(store_path)
+                                _flush_agent_batch(batch_agent, agent_data, agent_items)
+                    else:
+                        agent_data = [item[1] for item in agent_items]
+                        if agent_data:
+                            flushed_paths.add(store_path)
+                            _flush_agent_batch(batch_agent, agent_data, agent_items)
 
     elif args.num_workers == 1:
         for match_idx in range(start_match_idx, args.num_matches):

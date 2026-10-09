@@ -29,7 +29,14 @@ from gamingbench.ltm.tendency_prompts import (
     TENDENCY_STRATEGY_PROMPT,
     COOP_TENDENCY_STRATEGY_PROMPT,
     TENDENCY_INJECTION_BLOCK,
+    TENDENCY_INJECTION_CONFIDENCE_BLOCK,
     TENDENCY_EMPTY_BLOCK,
+    TENDENCY_STRATEGY_CONFIDENCE_PROMPT,
+    TENDENCY_REFLECTION_CONFIDENCE_PROMPT,
+    TENDENCY_STRATEGY_EXPLORE_PROMPT,
+    TENDENCY_INJECTION_EXPLORE_BLOCK,
+    TENDENCY_REFLECTION_EXPLORE_PROMPT,
+    TENDENCY_INJECTION_MEMORY_ONLY_BLOCK,
 )
 from gamingbench.prompts.observation_prompts import construct_observation_prompt
 from gamingbench.utils.utils import strip_thinking_block
@@ -49,6 +56,10 @@ class SimpleTendencyAgent(PromptAgent):
 
         self.tendency_store_path = getattr(config, "tendency_store_path", "tendency_store.json")
         self.batch_mode = getattr(config, "batch_mode", True)
+        self.st_use_confidence: bool = getattr(config, "st_use_confidence", False)
+        self.st_use_explore: bool = getattr(config, "st_use_explore", False)
+        self.st_use_memory_only: bool = getattr(config, "st_use_memory_only", False)
+        self.st_explore_min_obs: int = getattr(config, "st_explore_min_obs", 5)
 
         # tendency_store: {opponent_key: {"games_observed": int, "memories": list}}
         self.tendency_store: dict = {}
@@ -151,8 +162,9 @@ class SimpleTendencyAgent(PromptAgent):
                 actions = m.get("actions", [])
                 total = sum(a.get("count", 0) for a in actions)
                 for a in actions:
-                    pct = f"{a['count']}/{total}" if total else "0/?"
-                    lines.append(f"    └── {a.get('description', '?')}  [{pct} times]")
+                    frac = f"{a['count']}/{total}" if total else "0/?"
+                    pct = round(100 * a['count'] / total) if total else 0
+                    lines.append(f"    └── {a.get('description', '?')}  [{frac} times, {pct}%]")
 
         if inf_m:
             lines.append(
@@ -164,8 +176,9 @@ class SimpleTendencyAgent(PromptAgent):
                 hi = m.get("hidden_information", [])
                 total = sum(h.get("count", 0) for h in hi)
                 for h in hi:
-                    pct = f"{h['count']}/{total}" if total else "0/?"
-                    lines.append(f"    → {h.get('description', '?')}  [{pct} times]")
+                    frac = f"{h['count']}/{total}" if total else "0/?"
+                    pct = round(100 * h['count'] / total) if total else 0
+                    lines.append(f"    → {h.get('description', '?')}  [{frac} times, {pct}%]")
 
         lines.append("\n===")
         return "\n".join(lines)
@@ -214,6 +227,20 @@ class SimpleTendencyAgent(PromptAgent):
         return "\n".join(lines).rstrip()
 
     @staticmethod
+    def _filter_memories_by_count(memories: list, min_obs: int) -> list:
+        """Filter out memory entries whose total observation count is below min_obs.
+        Used in explore mode to exclude low-confidence entries from strategy synthesis."""
+        result = []
+        for m in memories:
+            total_count = 0
+            for variant_list_key in ("actions", "hidden_information"):
+                for variant in m.get(variant_list_key, []):
+                    total_count += variant.get("count", 0)
+            if total_count >= min_obs:
+                result.append(m)
+        return result
+
+    @staticmethod
     def _stamp_last_batch(old_memories: list, new_memories: list, current_batch: int) -> list:
         """
         Stamp last_batch on entries that are new or changed vs old_memories.
@@ -238,12 +265,30 @@ class SimpleTendencyAgent(PromptAgent):
         return new_memories
 
     @staticmethod
-    def _evict_stale_memories(memories: list, current_batch: int, stale_threshold: int = 5) -> list:
-        """Remove whole entries not updated in the last `stale_threshold` consecutive batches."""
-        return [
-            m for m in memories
-            if current_batch - m.get("last_batch", current_batch) < stale_threshold
-        ]
+    def _evict_stale_memories(memories: list, current_batch: int,
+                              stale_threshold: int = 5,
+                              min_count_to_protect: int = 3) -> list:
+        """Remove entries not updated in `stale_threshold` batches,
+        but only if their total observation count is below `min_count_to_protect`.
+        High-count memories are protected from eviction — they represent
+        established patterns that may persist because the agent avoids triggering them."""
+        result = []
+        for m in memories:
+            batches_stale = current_batch - m.get("last_batch", current_batch)
+            if batches_stale < stale_threshold:
+                # Recently updated — keep
+                result.append(m)
+                continue
+            # Stale — check total count across all variants
+            total_count = 0
+            for variant_list_key in ("actions", "hidden_information"):
+                for variant in m.get(variant_list_key, []):
+                    total_count += variant.get("count", 0)
+            if total_count >= min_count_to_protect:
+                # High-count established pattern — keep even if stale
+                result.append(m)
+            # else: low-count stale entry — evict
+        return result
 
     @staticmethod
     def _for_llm(memories: list) -> list:
@@ -254,12 +299,33 @@ class SimpleTendencyAgent(PromptAgent):
 
     def _get_tendency_block(self) -> str:
         """Return the strategy brief for in-game injection.
+        In confidence mode, CONFIDENCE: lines are stripped so the in-game agent
+        sees clean strategy rules without score annotations.
         Falls back to TENDENCY_EMPTY_BLOCK when no strategy has been generated yet."""
         if not self.current_opponent_key:
             return TENDENCY_EMPTY_BLOCK
         entry = self.tendency_store.get(self.current_opponent_key, {})
         strategy = entry.get("strategy", "")
-        return strategy if strategy else TENDENCY_EMPTY_BLOCK
+        if not strategy:
+            return TENDENCY_EMPTY_BLOCK
+        if self.st_use_confidence:
+            strategy = self._strip_confidence_lines(strategy)
+        return strategy
+
+    @staticmethod
+    def _extract_utility(game_history: str):
+        """Extract agent's score from game trajectory text.
+        Matches 'Your score=X' or 'Cooperative final score = X' patterns.
+        Returns float or None if not found."""
+        match = re.search(r'(?:Your score[=:]|Cooperative final score\s*=)\s*([-\d.]+)', game_history)
+        return float(match.group(1)) if match else None
+
+    @staticmethod
+    def _strip_confidence_lines(strategy: str) -> str:
+        """Remove CONFIDENCE: lines from a strategy string for in-game injection.
+        The full strategy (with scores) is preserved in the JSON store for the
+        next batch update cycle; only the injected text is stripped."""
+        return re.sub(r'^[ \t]*CONFIDENCE:.*\n?', '', strategy, flags=re.MULTILINE)
 
     # ------------------------------------------------------------------
     # In-game: prompt injection
@@ -272,8 +338,24 @@ class SimpleTendencyAgent(PromptAgent):
         env_name = observations["env_name"]
         board_state = construct_observation_prompt(observations, env_name)
 
-        tendency_block = self._get_tendency_block()
-        injection = TENDENCY_INJECTION_BLOCK.format(tendency_block=tendency_block)
+        if self.st_use_memory_only:
+            memories = self._get_memories()
+            # Filter out low-observation-count memories for in-game injection
+            if self.st_explore_min_obs > 0:
+                memories = self._filter_memories_by_count(memories, self.st_explore_min_obs)
+            games_observed = self._get_games_observed()
+            raw_block = self._render_block(memories, games_observed)
+            if not raw_block:
+                raw_block = TENDENCY_EMPTY_BLOCK
+            injection = TENDENCY_INJECTION_MEMORY_ONLY_BLOCK.format(tendency_block=raw_block)
+        else:
+            tendency_block = self._get_tendency_block()
+            if self.st_use_explore:
+                injection = TENDENCY_INJECTION_EXPLORE_BLOCK.format(tendency_block=tendency_block)
+            elif self.st_use_confidence:
+                injection = TENDENCY_INJECTION_CONFIDENCE_BLOCK.format(tendency_block=tendency_block)
+            else:
+                injection = TENDENCY_INJECTION_BLOCK.format(tendency_block=tendency_block)
 
         # Insert immediately before the board state
         observation_prompt = observation_prompt.replace(
@@ -368,7 +450,13 @@ class SimpleTendencyAgent(PromptAgent):
             game_history = game_history.replace(_my_label, f"{_my_label} (You)")
 
         game_rules = getattr(self, "current_game_intro", "") or ""
-        prompt = TENDENCY_REFLECTION_PROMPT.format(
+        if self.st_use_explore:
+            prompt_template = TENDENCY_REFLECTION_EXPLORE_PROMPT
+        elif self.st_use_confidence:
+            prompt_template = TENDENCY_REFLECTION_CONFIDENCE_PROMPT
+        else:
+            prompt_template = TENDENCY_REFLECTION_PROMPT
+        prompt = prompt_template.format(
             game_rules=game_rules,
             current_memories=current_memories_str,
             game_history=game_history,
@@ -435,6 +523,7 @@ class SimpleTendencyAgent(PromptAgent):
                 "opponent_key": self.current_opponent_key,
                 "delta": delta,
                 "game_history": marked_history,
+                "utility": self._extract_utility(game_history),
             }
             return
 
@@ -467,7 +556,7 @@ class SimpleTendencyAgent(PromptAgent):
                 or None if that game's reflection failed).
         game_histories: list of per-game trajectory strings (marked with "(You)").
         """
-        entry = self.tendency_store.get(opponent_key, {})
+        entry = self.tendency_store.setdefault(opponent_key, {})
         current_memories = entry.get("memories", [])
         games_observed = entry.get("games_observed", 0)
 
@@ -478,12 +567,8 @@ class SimpleTendencyAgent(PromptAgent):
                 f"SimpleTendencyAgent: all {num_games} game delta(s) for '{opponent_key}' "
                 "were None and no histories; skipping apply call, incrementing games_observed only."
             )
-            self.tendency_store[opponent_key] = {
-                "games_observed": games_observed + num_games,
-                "current_batch": current_batch,
-                "memories": current_memories,
-                "strategy": entry.get("strategy", ""),
-            }
+            entry["games_observed"] = games_observed + num_games
+            entry["current_batch"] = current_batch
             return
 
         if not valid_deltas:
@@ -522,7 +607,7 @@ class SimpleTendencyAgent(PromptAgent):
             new_memories = self._extract_json_array(stripped)
             if new_memories is None:
                 self.logger.warning(
-                    "SimpleTendencyAgent: failed to extract updated memories from apply response; "
+                    f"SimpleTendencyAgent: failed to extract updated memories from apply response for '{opponent_key}'; "
                     "keeping existing memories."
                 )
                 new_memories = current_memories
@@ -534,17 +619,15 @@ class SimpleTendencyAgent(PromptAgent):
         stamped = self._stamp_last_batch(current_memories, sorted_new, current_batch)
         new_memories = self._evict_stale_memories(stamped, current_batch)
 
-        self.tendency_store[opponent_key] = {
-            "games_observed": updated_games_observed,
-            "current_batch": current_batch,
-            "memories": new_memories,
-            "strategy": entry.get("strategy", ""),  # placeholder; overwritten below
-        }
+        entry["games_observed"] = updated_games_observed
+        entry["current_batch"] = current_batch
+        entry["memories"] = new_memories
 
-        # Always regenerate strategy after every batch
-        new_strategy = self._generate_strategy(opponent_key, game_histories or [], new_memories,
-                                               updated_games_observed)
-        self.tendency_store[opponent_key]["strategy"] = new_strategy
+        # Regenerate strategy after every batch (unless memory-only mode)
+        if not self.st_use_memory_only:
+            new_strategy = self._generate_strategy(opponent_key, game_histories or [], new_memories,
+                                                   updated_games_observed)
+            entry["strategy"] = new_strategy
 
     @staticmethod
     def _is_cooperative_game(game_rules: str) -> bool:
@@ -571,6 +654,19 @@ class SimpleTendencyAgent(PromptAgent):
         previous_strategy = entry.get("strategy", "") or "(No previous strategy — first batch.)"
 
         sorted_mems = self._sort_memories(memories)
+
+        # In explore mode, filter out low-observation-count memories
+        if self.st_use_explore:
+            filtered_mems = self._filter_memories_by_count(sorted_mems, self.st_explore_min_obs)
+            if not filtered_mems and sorted_mems:
+                self.logger.info(
+                    f"SimpleTendencyAgent: all {len(sorted_mems)} memory entries below "
+                    f"min_obs={self.st_explore_min_obs}; skipping strategy generation, "
+                    "keeping previous strategy."
+                )
+                return previous_strategy if previous_strategy != "(No previous strategy — first batch.)" else ""
+            sorted_mems = filtered_mems
+
         memory_stats = self._render_memory_stats(sorted_mems)
 
         trajectory_sections = []
@@ -581,28 +677,117 @@ class SimpleTendencyAgent(PromptAgent):
 
         game_rules = getattr(self, "current_game_intro", "") or ""
 
-        if self._is_cooperative_game(game_rules):
+        if self.st_use_explore:
+            prompt_template = TENDENCY_STRATEGY_EXPLORE_PROMPT
+            phase_title = "STRATEGY SYNTHESIS (EXPLORE MODE)"
+        elif self.st_use_confidence:
+            prompt_template = TENDENCY_STRATEGY_CONFIDENCE_PROMPT
+            phase_title = "STRATEGY SYNTHESIS (CONFIDENCE MODE)"
+        elif self._is_cooperative_game(game_rules):
             prompt_template = COOP_TENDENCY_STRATEGY_PROMPT
             phase_title = "COOPERATIVE STRATEGY SYNTHESIS"
         else:
             prompt_template = TENDENCY_STRATEGY_PROMPT
             phase_title = "STRATEGY SYNTHESIS"
 
-        prompt = prompt_template.format(
-            game_rules=game_rules,
-            memory_stats=memory_stats,
-            game_trajectories=all_trajectories,
-            previous_strategy=previous_strategy,
-            games_observed=games_observed,
-            num_games=len(game_histories),
-        )
+        if self.st_use_explore:
+            entry = self.tendency_store.get(opponent_key, {})
+            current_gp = entry.get("current_games_played", 0)
+            prompt = prompt_template.format(
+                game_rules=game_rules,
+                memory_stats=memory_stats,
+                game_trajectories=all_trajectories,
+                previous_strategy=previous_strategy,
+                games_observed=games_observed,
+                num_games=len(game_histories),
+                best_strategy=entry.get("best_strategy") or "(No best strategy yet — first version.)",
+                best_avg_utility=entry.get("best_avg_utility", 0.0),
+                best_games_played=entry.get("best_games_played", 0),
+                current_avg_utility=(entry.get("current_total_utility", 0.0) / current_gp
+                                     if current_gp > 0 else 0.0),
+                current_games_played=current_gp,
+            )
+        else:
+            prompt = prompt_template.format(
+                game_rules=game_rules,
+                memory_stats=memory_stats,
+                game_trajectories=all_trajectories,
+                previous_strategy=previous_strategy,
+                games_observed=games_observed,
+                num_games=len(game_histories),
+            )
+
         messages = [{"role": "user", "content": prompt}]
         responses, _ = self.llm_query(messages, n=1, stop=None, prompt_type="move")
         raw = responses[0]
         stripped = strip_thinking_block(raw)
 
         self._log_prompt(phase_title, prompt, raw)
-        return stripped.strip()
+
+        new_strategy = stripped.strip()
+
+        # Detect [INHERIT BEST] marker for version continuity
+        if self.st_use_explore:
+            inherit_best = new_strategy.startswith("[INHERIT BEST]")
+            entry = self.tendency_store.get(opponent_key, {})
+            if inherit_best:
+                new_strategy = new_strategy.replace("[INHERIT BEST]", "", 1).strip()
+                self.logger.info("Strategy synthesis: [INHERIT BEST] detected — restoring/preserving best baseline.")
+                entry["current_total_utility"] = entry.get("best_total_utility", entry.get("current_total_utility", 0.0))
+                entry["current_games_played"] = entry.get("best_games_played", entry.get("current_games_played", 0))
+                entry["is_best_baseline"] = True
+            else:
+                # Material change — reset utility counters for new version
+                entry["current_total_utility"] = 0.0
+                entry["current_games_played"] = 0
+                entry["is_best_baseline"] = False
+                self.logger.info("Strategy synthesis: new version — utility counters reset.")
+
+        return new_strategy
+
+    def _update_version_tracking(self, opponent_key: str, utilities: list):
+        """Accumulate utility for current strategy version and promote to best if it outperforms.
+
+        Called after each batch in explore mode. Compares the running average utility
+        of the current strategy version against the best-ever version. If the current
+        version exceeds the best after a minimum number of games, it becomes the new best.
+        """
+        entry = self.tendency_store.setdefault(opponent_key, {})
+        valid = [u for u in utilities if u is not None]
+        if not valid:
+            return
+
+        # Accumulate current version stats
+        entry["current_total_utility"] = entry.get("current_total_utility", 0.0) + sum(valid)
+        entry["current_games_played"] = entry.get("current_games_played", 0) + len(valid)
+        current_avg = entry["current_total_utility"] / entry["current_games_played"]
+
+        # Promote to best if current outperforms
+        best_avg = entry.get("best_avg_utility", float("-inf"))
+        is_best_baseline = entry.get("is_best_baseline", False)
+        
+        if current_avg > best_avg:
+            is_best_baseline = True
+            self.logger.info(
+                f"Version tracking: promoted current to best "
+                f"(avg={current_avg:.2f}, {entry['current_games_played']} games)"
+            )
+                
+        # If this is the best baseline (either just promoted, or inherited), keep best stats synced
+        if is_best_baseline:
+            entry["best_strategy"] = entry.get("strategy", "")
+            entry["best_avg_utility"] = current_avg
+            entry["best_total_utility"] = entry["current_total_utility"]
+            entry["best_games_played"] = entry["current_games_played"]
+                
+        entry["is_best_baseline"] = is_best_baseline
+
+        self.logger.info(
+            f"Version tracking: current avg={current_avg:.2f} "
+            f"({entry['current_games_played']} games), "
+            f"best avg={entry.get('best_avg_utility', 0):.2f} "
+            f"({entry.get('best_games_played', 0)} games)"
+        )
 
     def flush_batch_updates(self, gradient_data: list) -> None:
         """
@@ -627,9 +812,10 @@ class SimpleTendencyAgent(PromptAgent):
             game_history = item.get("game_history", "")
             if key:
                 if key not in grouped:
-                    grouped[key] = {"deltas": [], "game_histories": []}
+                    grouped[key] = {"deltas": [], "game_histories": [], "utilities": []}
                 grouped[key]["deltas"].append(delta)
                 grouped[key]["game_histories"].append(game_history)
+                grouped[key]["utilities"].append(item.get("utility"))
 
         for opponent_key, data in grouped.items():
             deltas = data["deltas"]
@@ -642,6 +828,13 @@ class SimpleTendencyAgent(PromptAgent):
                 f"for opponent '{opponent_key}' ({valid_count} valid, "
                 f"{len(deltas) - valid_count} skipped) — batch #{current_batch}"
             )
+            # Version tracking for explore mode (must run before generating new strategy).
+            # We only evaluate utility if a strategy was actually deployed. Batch 1 is played
+            # zero-shot, so we discard its utility to avoid locking in an empty baseline.
+            if self.st_use_explore:
+                if self.tendency_store.get(opponent_key, {}).get("strategy"):
+                    self._update_version_tracking(opponent_key, data["utilities"])
+
             self._apply_deltas(opponent_key, deltas, num_games=len(deltas),
                                game_histories=game_histories, current_batch=current_batch)
 

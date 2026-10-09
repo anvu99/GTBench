@@ -314,6 +314,8 @@ class OpenSpielGame:
         else:
             # draw
             winner_name = ""
+            _match.winner_score = results[0]
+            _match.loser_score = results[1]
 
         _match.set_winner(winner_name)
         tracker.add_match(_match)

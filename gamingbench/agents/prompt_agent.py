@@ -141,6 +141,17 @@ class PromptAgent(BaseAgent):
                 if not valid_moves or matched_valid_move is not None:
                     if matched_valid_move is not None:
                         move = matched_valid_move
+                    
+                    if observations.get('env_name') == 'buy_sell_game':
+                        import re
+                        if re.search(r'<\s*ACCEPT\s*>', move, re.IGNORECASE) and observations.get("last_proposed_price") is None:
+                            error_msg = f"Invalid move '{move}'. You cannot accept when there is no active proposal on the table. You must propose a price using <PROPOSE: X>. Please try again."
+                            if attempt < max_retries - 1:
+                                self.logger.warning(error_msg)
+                                msgs.append({"role": "assistant", "content": responses[0]})
+                                msgs.append({"role": "user", "content": error_msg})
+                            continue
+                            
                     break
                 else:
                     error_msg = f"Invalid move '{move}'. Your move must be one of the legal actions: {valid_moves}. Please try again."

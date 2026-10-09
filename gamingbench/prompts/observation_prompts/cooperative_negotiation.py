@@ -56,9 +56,14 @@ def construct_observation_prompt(observations):
         else:
             last_proposal_prompt = ''
 
-        query_prompt = 'Now, it is your decision. ' \
-                       'If you find the proposal raised by your partner is acceptable for both of you, you should output <Agree>. ' \
-                       'Otherwise, you should output your proposal in the format <Proposal: [a, b, c]>.'
+        if most_recent_proposal is None:
+            query_prompt = 'Now, it is your decision. ' \
+                           'Since there is no proposal from the opponent yet, you cannot output <Agree>. ' \
+                           'You must output your proposal in the format <Proposal: [a, b, c]>.'
+        else:
+            query_prompt = 'Now, it is your decision. ' \
+                           'If you find the proposal raised by your partner is acceptable for both of you, you should output <Agree>. ' \
+                           'Otherwise, you should output your proposal in the format <Proposal: [a, b, c]>.'
 
         if is_chat:
             if is_active:
