@@ -31,12 +31,14 @@ class AgentProStore:
     def save(self, filepath: str) -> None:
         """Serializes the AgentPro store to a JSON file atomically."""
         os.makedirs(os.path.dirname(os.path.abspath(filepath)), exist_ok=True)
-        tmp_filepath = filepath + ".tmp"
+        # Use UUID to prevent race conditions among parallel threads renaming the same .tmp file
+        import uuid
+        tmp_filepath = f"{filepath}.{uuid.uuid4().hex}.tmp"
         with open(tmp_filepath, "w") as f:
             json.dump(self.data, f, indent=4)
             f.flush()
             os.fsync(f.fileno())
-        os.rename(tmp_filepath, filepath)
+        os.replace(tmp_filepath, filepath)
 
     def load(self, filepath: str) -> None:
         """Deserializes the AgentPro store from a JSON file."""

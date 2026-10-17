@@ -40,7 +40,7 @@ def _get_gemini_client():
     return _gemini_client
 
 
-def chat_llm(messages, model, temperature, max_tokens, n, timeout, stop, return_tokens=False, chat_seed=0, thinking_budget=0):
+def chat_llm(messages, model, temperature, max_tokens, n, timeout, stop, return_tokens=False, chat_seed=None, thinking_budget=0):
     if "gemini" in model.lower():
         client = _get_gemini_client()
         
@@ -73,6 +73,9 @@ def chat_llm(messages, model, temperature, max_tokens, n, timeout, stop, return_
                 thinking_budget=thinking_budget,
                 include_thoughts=True,
             )
+            
+        if chat_seed is not None:
+            config_args["seed"] = chat_seed
             
         config = types.GenerateContentConfig(**config_args)
         

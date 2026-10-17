@@ -708,6 +708,10 @@ class SlidingWindowAgent(PromptAgent):
                     game_histories=formatted_histories
                 )
                 
+                # Gemini-specific: encourage game-state-grounded observations
+                if hasattr(self, 'model') and self.model and 'gemini' in getattr(self.model, 'model_path', '').lower():
+                    rep_prompt += "\nFocus on specific, actionable patterns grounded in game states — such as the opponent's likely hidden valuations, decision thresholds, or predictable reactions to specific proposals — rather than general personality traits.\n"
+                
                 if getattr(self, 'sw_deterministic_explore', False) and was_exploring:
                     from gamingbench.prompts.sliding_window_prompts import SW_DETERMINISTIC_EXPLORE_REP_CONTEXT
                     rep_explore_context = SW_DETERMINISTIC_EXPLORE_REP_CONTEXT.format(wild_strategy=current_strategy)
@@ -788,6 +792,29 @@ class SlidingWindowAgent(PromptAgent):
                             strat_prompt += SW_DETERMINISTIC_EXPLORE_INJECTION
 
                     messages = [{"role": "user", "content": strat_prompt}]
+                    
+                    # Gemini-specific: replace "suppress thinking" rule with GEMINI_THOUGHT tag instruction
+                    if hasattr(self, 'model') and self.model and 'gemini' in getattr(self.model, 'model_path', '').lower():
+                        # For the 6-step explore prompt
+                        strat_prompt = strat_prompt.replace(
+                            "- Do NOT include your Step 1\u20136 analysis in the output \u2014 output ONLY the final strategy.",
+                            "- Wrap your Step 1\u20136 analysis inside <GEMINI_THOUGHT>...</GEMINI_THOUGHT> tags. The analysis will be automatically stripped \u2014 only the strategy text outside these tags will be stored."
+                        )
+                        # For the 5-step strategy-only explore prompt
+                        strat_prompt = strat_prompt.replace(
+                            "- Do NOT include your Step 1\u20135 analysis in the output \u2014 output ONLY the final strategy.",
+                            "- Wrap your Step 1\u20135 analysis inside <GEMINI_THOUGHT>...</GEMINI_THOUGHT> tags. The analysis will be automatically stripped \u2014 only the strategy text outside these tags will be stored."
+                        )
+                        # Update INHERIT BEST instruction to reference the tag
+                        strat_prompt = strat_prompt.replace(
+                            "the very first line of your output must be exactly: [INHERIT BEST]",
+                            "the very first line of your output (after the closing </GEMINI_THOUGHT> tag) must be exactly: [INHERIT BEST]"
+                        )
+                        # Gemini-specific: encourage exploration on explore calls
+                        if is_explore_call:
+                            strat_prompt += "\n\nWhen deciding between EVOLVE and INHERIT BEST, remember that estimated utility comparisons are inherently uncertain. Favor EVOLVE if your draft strategy introduces meaningfully different tactics that could plausibly yield higher utility in the best scenario and are consistent with what the OPPONENT REPUTATION NOTE tells you about the opponent. Only choose INHERIT BEST if your draft is clearly and significantly worse AND your OPPONENT REPUTATION NOTE directly indicates the draft strategy would fail against this opponent.\n"
+                        messages = [{"role": "user", "content": strat_prompt}]
+                    
                     try:
                         generations, _ = self.llm_query(messages, n=1, stop=None, prompt_type='move')
                         strat_raw = generations[0]
@@ -946,7 +973,7 @@ class SlidingWindowAgent(PromptAgent):
         """Return the reasoning text inside the model's thinking block, for trace logging only."""
         if not raw:
             return "(empty generation)"
-        for open_tag, close_tag in (("<think>", "</think>"), ("<thinking>", "</thinking>"), ("<thought>", "</thought>")):
+        for open_tag, close_tag in (("<think>", "</think>"), ("<thinking>", "</thinking>"), ("<thought>", "</thought>"), ("<GEMINI_THOUGHT>", "</GEMINI_THOUGHT>")):
             end = raw.rfind(close_tag)
             if end != -1:
                 start = raw.find(open_tag)
